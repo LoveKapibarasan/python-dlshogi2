@@ -153,11 +153,72 @@ Connect the engine to any USI-compatible shogi GUI (e.g., Shogidokoro, ShogiGUI)
 
 ## Pre-trained Models
 
-| File | Format | Training data |
-|------|--------|---------------|
-| `checkpoints/checkpoint.pth` | PyTorch | Floodgate 2020 (full year) |
-| `model/model-0000167.onnx` | ONNX | Floodgate 2020 (full year) |
-| `model/model-0000225kai.onnx` | ONNX | Floodgate 2020 (full year) |
+The repository ships with pre-trained weights so you can try the engine immediately without training.
+
+| File | Format | Size | Epochs | Steps |
+|------|--------|------|--------|-------|
+| `checkpoints/checkpoint-001.pth` | PyTorch | 57 MB | 1 | 2,495 |
+| `checkpoints/checkpoint.pth` | PyTorch | 57 MB | 3 | 195,555 |
+| `model/model-0000167.onnx` | ONNX | 29 MB | — | — |
+| `model/model-0000225kai.onnx` | ONNX | 29 MB | — | — |
+
+All models were trained on **Floodgate 2020** game records (rating ≥ 3500, ≥ 50 moves).
+
+**PyTorch vs ONNX:**
+- `.pth` files are ~57 MB because they store both the model weights and the optimizer state (needed to resume training).
+- `.onnx` files are ~29 MB because they contain only the model weights — half the size, faster to load, and usable without PyTorch.
+- Use `.pth` if you want to resume training; use `.onnx` for playing.
+
+**`checkpoints/.gitignore` and `model/.gitignore`** both contain `*`, which prevents any newly generated files from being accidentally committed, while leaving the pre-trained files above tracked by git.
+
+---
+
+## Training Outputs
+
+After running `train.py`, the following files are generated:
+
+```
+checkpoints/
+  checkpoint-001.pth    # saved after epoch 1  (~57 MB)
+  checkpoint-002.pth    # saved after epoch 2  (~57 MB)
+  ...
+
+model/
+  *.onnx                # only if you run the ONNX export step (~29 MB each)
+```
+
+### Checkpoint file structure
+
+Each `.pth` file is a Python dict saved with `torch.save`:
+
+```python
+{
+    'epoch':     1,      # which epoch this was saved at
+    't':         2495,   # total training steps completed
+    'model':     {...},  # network weights (138 tensors, ResNet 10-block 192ch)
+    'optimizer': {...},  # SGD state — required only to resume training
+}
+```
+
+To load a checkpoint for inference only (no optimizer needed):
+
+```python
+import torch
+from pydlshogi2.network.policy_value_resnet import PolicyValueNetwork
+
+model = PolicyValueNetwork()
+ckpt = torch.load('checkpoints/checkpoint.pth', map_location='cpu')
+model.load_state_dict(ckpt['model'])
+model.eval()
+```
+
+To resume training from a checkpoint, pass it via `--resume`:
+
+```bash
+python -m pydlshogi2.train train.hcpe test.hcpe \
+    --resume checkpoints/checkpoint.pth \
+    --epoch 10
+```
 
 ---
 

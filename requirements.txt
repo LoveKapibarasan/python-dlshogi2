@@ -1,5 +1,6 @@
 cshogi
 numpy
 onnxruntime
+onnxscript
 scikit-learn
 torch
