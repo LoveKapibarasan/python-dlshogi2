@@ -1,6 +1,6 @@
-﻿from distutils.core import setup
+from setuptools import setup, find_packages
 
 setup(
     name='python-dlshogi2',
-    packages = ['pydlshogi2']
+    packages=find_packages(),
 )

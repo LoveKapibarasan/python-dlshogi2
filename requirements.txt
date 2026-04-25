@@ -1,0 +1,5 @@
+cshogi
+numpy
+onnxruntime
+scikit-learn
+torch
