@@ -1,3 +1,3 @@
 #!/bin/sh
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-"$SCRIPT_DIR/.venv/bin/python" -m pydlshogi2.player.mcts_player
+"$SCRIPT_DIR/dist/mcts_player/mcts_player"
