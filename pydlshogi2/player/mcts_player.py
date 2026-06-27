@@ -4,7 +4,7 @@ import torch
 from cshogi import Board, BLACK, NOT_REPETITION, REPETITION_DRAW, REPETITION_WIN, REPETITION_SUPERIOR, move_to_usi
 from pydlshogi2.features import FEATURES_NUM, make_input_features, make_move_label
 from pydlshogi2.uct.uct_node import NodeTree
-from pydlshogi2.network.policy_value_resnet import PolicyValueNetwork
+from pydlshogi2.network.policy_value_resnet import load_network
 from pydlshogi2.player.base_player import BasePlayer
 
 import time
@@ -18,6 +18,10 @@ DEFAULT_BATCH_SIZE = 32
 DEFAULT_RESIGN_THRESHOLD = 0.01
 # デフォルトPUCTの定数
 DEFAULT_C_PUCT = 1.0
+# デフォルトPUCTのlog項の基準(AlphaZeroのc_base)
+DEFAULT_C_BASE = 19652.0
+# デフォルトFPU(First Play Urgency)の減算量
+DEFAULT_FPU_REDUCTION = 0.27
 # デフォルト温度パラメータ
 DEFAULT_TEMPERATURE = 1.0
 # デフォルト持ち時間マージン(ms)
@@ -28,6 +32,8 @@ DEFAULT_BYOYOMI_MARGIN = 100
 DEFAULT_PV_INTERVAL = 500
 # デフォルトプレイアウト数
 DEFAULT_CONST_PLAYOUT = 1000
+# デフォルトのルート詰み探索手数(奇数, 探索開始時に1回だけ実行)
+DEFAULT_MATE_ROOT_PLY = 7
 # 勝ちを表す定数（数値に意味はない）
 VALUE_WIN = 10000
 # 負けを表す定数（数値に意味はない）
@@ -109,6 +115,10 @@ class MCTSPlayer(BasePlayer):
         self.resign_threshold = DEFAULT_RESIGN_THRESHOLD
         # PUCTの定数
         self.c_puct = DEFAULT_C_PUCT
+        # PUCTのlog項の基準
+        self.c_base = DEFAULT_C_BASE
+        # FPUの減算量
+        self.fpu_reduction = DEFAULT_FPU_REDUCTION
         # 温度パラメータ
         self.temperature = DEFAULT_TEMPERATURE
         # 持ち時間マージン(ms)
@@ -117,6 +127,8 @@ class MCTSPlayer(BasePlayer):
         self.byoyomi_margin = DEFAULT_BYOYOMI_MARGIN
         # PV表示間隔
         self.pv_interval = DEFAULT_PV_INTERVAL
+        # ルート詰み探索手数
+        self.mate_root_ply = DEFAULT_MATE_ROOT_PLY
 
         self.debug = False
 
@@ -128,10 +140,13 @@ class MCTSPlayer(BasePlayer):
         print('option name batchsize type spin default ' + str(DEFAULT_BATCH_SIZE) + ' min 1 max 256')
         print('option name resign_threshold type spin default ' + str(int(DEFAULT_RESIGN_THRESHOLD * 100)) + ' min 0 max 100')
         print('option name c_puct type spin default ' + str(int(DEFAULT_C_PUCT * 100)) + ' min 10 max 1000')
+        print('option name c_base type spin default ' + str(int(DEFAULT_C_BASE)) + ' min 1 max 100000')
+        print('option name fpu_reduction type spin default ' + str(int(DEFAULT_FPU_REDUCTION * 100)) + ' min 0 max 100')
         print('option name temperature type spin default ' + str(int(DEFAULT_TEMPERATURE * 100)) + ' min 10 max 1000')
         print('option name time_margin type spin default ' + str(DEFAULT_TIME_MARGIN) + ' min 0 max 1000')
         print('option name byoyomi_margin type spin default ' + str(DEFAULT_BYOYOMI_MARGIN) + ' min 0 max 1000')
         print('option name pv_interval type spin default ' + str(DEFAULT_PV_INTERVAL) + ' min 0 max 10000')
+        print('option name mate_root_ply type spin default ' + str(DEFAULT_MATE_ROOT_PLY) + ' min 1 max 31')
         print('option name debug type check default false')
 
     def setoption(self, args):
@@ -145,6 +160,10 @@ class MCTSPlayer(BasePlayer):
             self.resign_threshold = int(args[3]) / 100
         elif args[1] == 'c_puct':
             self.c_puct = int(args[3]) / 100
+        elif args[1] == 'c_base':
+            self.c_base = float(args[3])
+        elif args[1] == 'fpu_reduction':
+            self.fpu_reduction = int(args[3]) / 100
         elif args[1] == 'temperature':
             self.temperature = int(args[3]) / 100
         elif args[1] == 'time_margin':
@@ -153,15 +172,15 @@ class MCTSPlayer(BasePlayer):
             self.byoyomi_margin = int(args[3])
         elif args[1] == 'pv_interval':
             self.pv_interval = int(args[3])
+        elif args[1] == 'mate_root_ply':
+            self.mate_root_ply = int(args[3])
         elif args[1] == 'debug':
             self.debug = args[3] == 'true'
 
     # モデルのロード
     def load_model(self):
-        self.model = PolicyValueNetwork()
-        self.model.to(self.device)
-        checkpoint = torch.load(self.modelfile, map_location=self.device)
-        self.model.load_state_dict(checkpoint['model'])
+        # チェックポイントに埋め込まれた構成からネットワークを復元する
+        self.model, _ = load_network(self.modelfile, self.device)
         # モデルを評価モードにする
         self.model.eval()
 
@@ -265,6 +284,13 @@ class MCTSPlayer(BasePlayer):
             if matemove:
                 print('info score mate 1 pv {}'.format(move_to_usi(matemove)), flush=True)
                 return move_to_usi(matemove), None
+
+            # より深いルート詰み探索(探索開始時に1回だけ実行)
+            if self.mate_root_ply >= 3:
+                matemove = self.root_board.mate_move(self.mate_root_ply)
+                if matemove:
+                    print('info score mate {} pv {}'.format(self.mate_root_ply, move_to_usi(matemove)), flush=True)
+                    return move_to_usi(matemove), None
 
         # プレイアウト数をクリア
         self.playout_count = 0
@@ -478,14 +504,40 @@ class MCTSPlayer(BasePlayer):
 
     # UCB値が最大の手を求める
     def select_max_ucb_child(self, node):
-        q = np.divide(node.child_sum_value, node.child_move_count,
-            out=np.zeros(len(node.child_move), np.float32),
-            where=node.child_move_count != 0)
+        """Select the child maximising the PUCT score.
+
+        Two refinements over the textbook AlphaZero formula are applied:
+
+        * **FPU (First Play Urgency):** unvisited children are seeded with the
+          parent's mean value reduced by ``fpu_reduction * sqrt(visited policy
+          mass)`` instead of ``0``, which avoids over-eager exploration of
+          low-prior moves early in a node's life.
+        * **PUCT log term:** the exploration constant grows slowly with the
+          parent visit count via ``log((N + c_base + 1) / c_base)``.
+
+        :param node: the node whose child to select.
+        :returns: index of the selected child move.
+        """
+        child_move_count = node.child_move_count
+
+        # 初回はノイズのない方策に従う(全Qが0のため)
         if node.move_count == 0:
-            u = 1.0
-        else:
-            u = np.sqrt(np.float32(node.move_count)) / (1 + node.child_move_count)
-        ucb = q + self.c_puct * u * node.policy
+            return np.argmax(node.policy)
+
+        # 訪問済みの子は平均価値、未訪問の子はFPU値
+        q = np.divide(node.child_sum_value, child_move_count,
+            out=np.zeros(len(node.child_move), np.float32),
+            where=child_move_count != 0)
+        visited = child_move_count != 0
+        parent_q = node.sum_value / node.move_count
+        visited_policy_sum = node.policy[visited].sum()
+        fpu = parent_q - self.fpu_reduction * np.sqrt(visited_policy_sum, dtype=np.float32)
+        q = np.where(visited, q, np.float32(fpu))
+
+        # 探索係数(訪問数に応じて緩やかに増加)
+        c = math.log((node.move_count + self.c_base + 1) / self.c_base) + self.c_puct
+        u = c * node.policy * np.sqrt(np.float32(node.move_count)) / (1 + child_move_count)
+        ucb = q + u
 
         return np.argmax(ucb)
 
@@ -625,7 +677,8 @@ class MCTSPlayer(BasePlayer):
 
             # ノードの値を更新
             current_node.policy = probabilities
-            current_node.value = float(value)
+            # value は形状(1,)のため item() でスカラー化する (numpy 2.x対応)
+            current_node.value = float(value.item())
 
 if __name__ == '__main__':
     player = MCTSPlayer()

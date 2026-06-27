@@ -1,4 +1,6 @@
-﻿from cshogi import *
+﻿import math
+
+from cshogi import *
 
 # 移動方向を表す定数
 MOVE_DIRECTION = [
@@ -88,6 +90,10 @@ def make_move_label(move, color):
 
     return move_direction * 81 + to_sq
 
+# 評価値を勝率に変換するデフォルト係数
+# MCTSの評価値変換 (cp = -log(1/p - 1) * 600) と整合する
+DEFAULT_EVAL_COEF = 600.0
+
 # 対局結果から報酬を作成
 def make_result(game_result, color):
     if color == BLACK:
@@ -101,3 +107,38 @@ def make_result(game_result, color):
         if game_result == WHITE_WIN:
             return 1
     return 0.5
+
+# 評価値を手番側から見た勝率に変換
+def make_eval_winrate(eval_value, color, eval_coef=DEFAULT_EVAL_COEF):
+    """Convert a stored centipawn-like evaluation into a side-to-move win rate.
+
+    The evaluation stored in an HCPE record is from **black's perspective**
+    (see ``utils/csa_to_hcpe.py``); it is flipped here when white is to move so
+    the returned probability is always from the perspective of the side to move.
+
+    :param eval_value: the raw ``eval`` field from the HCPE record.
+    :param color: side to move at the position (``cshogi.BLACK`` / ``WHITE``).
+    :param eval_coef: temperature of the sigmoid mapping centipawns to a
+        probability.
+    :returns: win probability in ``[0, 1]`` for the side to move.
+    """
+    eval_stm = eval_value if color == BLACK else -eval_value
+    return 1.0 / (1.0 + math.exp(-eval_stm / eval_coef))
+
+# 対局結果と評価値をブレンドした価値教師を作成
+def make_value_target(game_result, eval_value, color, val_lambda=1.0, eval_coef=DEFAULT_EVAL_COEF):
+    """Blend the game outcome with the search evaluation into a value target.
+
+    :param game_result: the ``gameResult`` field from the HCPE record.
+    :param eval_value: the ``eval`` field from the HCPE record.
+    :param color: side to move at the position.
+    :param val_lambda: weight on the game outcome; ``1.0`` reproduces the
+        outcome-only target, ``0.0`` uses the evaluation only.
+    :param eval_coef: temperature passed to :func:`make_eval_winrate`.
+    :returns: blended win-probability target in ``[0, 1]``.
+    """
+    z = make_result(game_result, color)
+    if val_lambda >= 1.0:
+        return z
+    p = make_eval_winrate(eval_value, color, eval_coef)
+    return val_lambda * z + (1.0 - val_lambda) * p
