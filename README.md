@@ -205,13 +205,21 @@ SE-free network.
 Generate self-play games and improve the model in a loop:
 
 ```bash
-# one batch of self-play games
+# one batch of self-play games (single process)
 python -m pydlshogi2.selfplay checkpoints/checkpoint.pth selfplay.hcpe \
     --games 1000 --playouts 800 --gpu 0
 
-# full generate -> train -> promote loop
-./rl_loop.sh checkpoints/checkpoint.pth
+# parallel self-play (recommended): a single process is CPU-bound on the MCTS
+# tree and leaves the GPU idle; N workers sharing the GPU multiply throughput.
+WORKERS=8 GAMES=1000 PLAYOUTS=400 GPU=0 \
+    ./selfplay_parallel.sh checkpoints/checkpoint.pth selfplay.hcpe
+
+# full generate -> train -> promote loop (uses parallel self-play internally)
+WORKERS=8 ./rl_loop.sh checkpoints/checkpoint.pth
 ```
+
+The RL loop honours `WORKERS`, `GAMES`, `PLAYOUTS`, `SELFPLAY_BATCHSIZE`,
+`ITERATIONS`, `EPOCHS`, `LR`, `VAL_LAMBDA`, `GPU` and `WORKDIR`.
 
 ## Running on a GPU server (Vast.ai)
 

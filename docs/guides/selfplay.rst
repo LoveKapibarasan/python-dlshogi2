@@ -19,6 +19,23 @@ as ``gameResult``. The move actually played is sampled from the visit counts
 with a temperature, and Dirichlet noise is mixed into the root prior, so games
 stay diverse. See :mod:`pydlshogi2.selfplay`.
 
+Parallel generation
+-------------------
+
+A single self-play process is CPU-bound on the MCTS tree and leaves the GPU
+mostly idle. ``selfplay_parallel.sh`` runs several workers (each with a distinct
+``--seed``) that share the GPU and concatenates their output, multiplying
+throughput roughly by the worker count:
+
+.. code-block:: bash
+
+   WORKERS=8 GAMES=1000 PLAYOUTS=400 GPU=0 \
+       ./selfplay_parallel.sh checkpoints/checkpoint.pth selfplay.hcpe
+
+The output is a plain concatenation (no de-duplication): in self-play the same
+position reached in different games carries different outcomes, and those
+repeated samples are exactly the value signal training averages over.
+
 Useful options
 --------------
 

@@ -240,7 +240,13 @@ def main():
     parser.add_argument('--noise_eps', type=float, default=0.25, help='root Dirichlet mixing weight')
     parser.add_argument('--gpu', type=int, default=0, help='GPU id (-1 for CPU)')
     parser.add_argument('--batchsize', type=int, default=32, help='inference batch size')
+    parser.add_argument('--seed', type=int, default=None,
+                        help='random seed (set a distinct value per parallel worker)')
     args = parser.parse_args()
+
+    # 並列ワーカーが同一局を量産しないようシードを設定する
+    if args.seed is not None:
+        np.random.seed(args.seed)
 
     engine = SelfPlayEngine(dirichlet_alpha=args.dirichlet_alpha, noise_eps=args.noise_eps)
     engine.modelfile = args.modelfile
