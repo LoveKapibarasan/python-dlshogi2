@@ -39,10 +39,22 @@ for i in $(seq 1 "$ITERATIONS"); do
     DATA="$WORKDIR/selfplay-$(printf '%03d' "$i").hcpe"
     NEXT="$WORKDIR/checkpoint-$(printf '%03d' "$i").pth"
 
-    echo "[1/2] parallel self-play ($WORKERS workers) -> $DATA"
-    WORKERS="$WORKERS" GAMES="$GAMES" PLAYOUTS="$PLAYOUTS" \
-        BATCHSIZE="$SELFPLAY_BATCHSIZE" GPU="$GPU" PYTHON="$PYTHON" \
-        "$SCRIPT_DIR/selfplay_parallel.sh" "$CURRENT" "$DATA"
+    # 既に学習済みのイテレーションはスキップ (クラッシュ/preemptionからの再開)
+    if [ -s "$NEXT" ]; then
+        echo "iteration $i already trained ($NEXT); skipping"
+        CURRENT="$NEXT"
+        continue
+    fi
+
+    # 生成済みの自己対局データがあれば再利用する
+    if [ -s "$DATA" ]; then
+        echo "[1/2] reusing existing self-play data -> $DATA"
+    else
+        echo "[1/2] parallel self-play ($WORKERS workers) -> $DATA"
+        WORKERS="$WORKERS" GAMES="$GAMES" PLAYOUTS="$PLAYOUTS" \
+            BATCHSIZE="$SELFPLAY_BATCHSIZE" GPU="$GPU" PYTHON="$PYTHON" \
+            "$SCRIPT_DIR/selfplay_parallel.sh" "$CURRENT" "$DATA"
+    fi
 
     echo "[2/2] train -> $NEXT"
     # Train on all self-play data generated so far (the test split reuses the

@@ -5,7 +5,7 @@ import sys
 import torch
 import torch.optim as optim
 
-from pydlshogi2.network.policy_value_resnet import build_network
+from pydlshogi2.network.policy_value_resnet import build_network, LEGACY_NETWORK_CONFIG
 from pydlshogi2.dataloader import HcpeDataLoader
 
 parser = argparse.ArgumentParser(description='Train policy value network')
@@ -64,11 +64,10 @@ else:
 # ネットワーク構成 (resume時はチェックポイントの構成を優先)
 if args.resume:
     resume_checkpoint = torch.load(args.resume, map_location=device)
-    network_config = resume_checkpoint.get('network', None)
+    # 旧checkpointは構成情報を持たないため、load_networkと同じレガシー構成で復元する
+    network_config = resume_checkpoint.get('network', LEGACY_NETWORK_CONFIG)
 else:
     resume_checkpoint = None
-    network_config = None
-if network_config is None:
     network_config = {'blocks': args.blocks, 'channels': args.channels,
                       'fcl': args.fcl, 'se': not args.no_se}
 
