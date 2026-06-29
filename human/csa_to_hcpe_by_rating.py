@@ -159,12 +159,14 @@ def convert(csa_dir, out_dir, edges, filter_moves, test_ratio, allow_unrated):
             split = 'test' if np.random.random() < test_ratio else 'train'
 
             board.set_sfen(kif.sfen)
+            # scoresは無い場合がある (KIF由来のCSAなど)。無ければ0扱い。
+            scores = getattr(kif, 'scores', None) or []
             # band_index -> list of buffer rows for this game/band
             per_band = {}
             ok = True
             p = 0
             try:
-                for move, score in zip(kif.moves, kif.scores):
+                for i, move in enumerate(kif.moves):
                     if not board.is_legal(move):
                         raise ValueError('illegal move')
 
@@ -177,6 +179,7 @@ def convert(csa_dir, out_dir, edges, filter_moves, test_ratio, allow_unrated):
                     rec = buffer[p]
                     p += 1
                     board.to_hcp(rec['hcp'])
+                    score = scores[i] if i < len(scores) else 0
                     eval_value = min(EVAL_CLIP, max(int(score), -EVAL_CLIP))
                     rec['eval'] = eval_value if board.turn == BLACK else -eval_value
                     rec['bestMove16'] = move16(move)

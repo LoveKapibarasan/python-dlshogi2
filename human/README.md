@@ -8,10 +8,32 @@ It does **not** touch the reinforcement-learning pipeline. It only reuses the
 shared network (`pydlshogi2.network`) and feature encoding (`pydlshogi2.features`)
 at training time; the data tooling here depends only on `cshogi`.
 
-## 1. Build rating-bucketed data from human game records
+## 0. Shogi Wars KIF -> CSA (if your data is Shogi Wars .kif)
+
+Shogi Wars exports are UTF-8 KIF with the player rank on `先手段級：` / `後手段級：`
+lines and a bare `投了` ending that `cshogi` cannot interpret. `kif_to_csa.py`
+handles all of this and unifies the corpus to CSA, mapping each dan/kyu rank to
+an **ordinal** (higher = stronger) emitted as a floodgate-style rate line:
+
+```
+30級=1, 29級=2, ..., 1級=30, 初段=31, 二段=32, ..., 九段=39
+```
 
 ```bash
-python human/csa_to_hcpe_by_rating.py ~/kif out \
+python human/kif_to_csa.py ~/kifs/kif_data converted   # -> converted/shogiwars-*.csa
+```
+
+## 1. Build rank-bucketed data
+
+The bands are given in **ordinals** (see the mapping above). For example
+`--bands 31,33` makes three buckets: kyu (`<31`), 初段-二段 (`31-32`), 三段+ (`33+`).
+
+```bash
+# from the converted Shogi Wars CSA
+python human/csa_to_hcpe_by_rating.py converted out --bands 31,33 --filter_moves 20
+
+# or, for numeric-rated CSA (e.g. floodgate), use rating boundaries directly
+python human/csa_to_hcpe_by_rating.py ~/csa out \
     --bands 1500,1800,2100,2400 --filter_moves 20 --test_ratio 0.05
 ```
 
