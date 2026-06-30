@@ -11,12 +11,15 @@ Deep learning shogi AI engine using a policy-value network and Monte Carlo Tree 
 python-dlshogi2 trains a ResNet-based neural network on shogi game records, then uses the trained model to play shogi via MCTS. It communicates with shogi GUIs using the **USI (Universal Shogi Interface)** protocol.
 
 **Key features:**
-- Policy-value ResNet (10 blocks, 192 channels)
-- MCTS with virtual loss for parallelism and UCB-based exploration
-- Mate detection and draw recognition
+- Configurable policy-value ResNet with optional Squeeze-and-Excitation (default: 20 blocks, 256 channels, SE)
+- Supervised training with an evaluation-blended value target
+- Self-play reinforcement learning loop (AlphaZero / expert-iteration style)
+- MCTS with virtual loss, FPU and an AlphaZero-style PUCT term
+- Mate detection (configurable root mate search) and draw recognition
 - Ponder support (thinking during opponent's turn)
-- PyTorch and ONNX inference backends
+- PyTorch and ONNX (CUDA/TensorRT) inference backends
 - Resignation based on configurable win-rate threshold
+- Sphinx API documentation generated from in-source docstrings
 
 ---
 
@@ -102,6 +105,34 @@ python -m pydlshogi2.train train.hcpe test.hcpe \
 | `--batchsize` | 1024 | Mini-batch size |
 | `--lr` | 0.01 | Learning rate (SGD with momentum) |
 | `--checkpoint` | — | Checkpoint path template |
+| `--blocks` / `--channels` / `--fcl` | 20 / 256 / 256 | Network size (ignored when `--resume`) |
+| `--no_se` | off | Disable Squeeze-and-Excitation blocks |
+| `--val_lambda` | 0.333 | Weight on game outcome vs. search eval in the value target |
+| `--eval_coef` | 600 | Sigmoid temperature for eval→win-rate |
+| `--amp` | off | bfloat16 autocast (mixed precision) |
+| `--compile` | off | Wrap model with `torch.compile` |
+| `--save_interval` | 0 | Save a checkpoint every N steps (0 = epoch end only) |
+| `--resume` | — | Resume from a checkpoint (model + optimizer + step + architecture) |
+
+### Interrupting & resuming (preemptible instances)
+
+Training is preemption-safe: on `SIGTERM`/`SIGINT` it checkpoints after the
+current step and exits cleanly, and `--save_interval` writes periodic
+checkpoints mid-epoch. Resume with the **same checkpoint path**:
+
+```bash
+# initial run (writes a single rolling checkpoint)
+python -m pydlshogi2.train train.hcpe test.hcpe --gpu 0 --epoch 10 \
+    --save_interval 1000 --checkpoint checkpoints/latest.pth
+
+# after a preemption, continue from where it stopped
+python -m pydlshogi2.train train.hcpe test.hcpe --gpu 0 --epoch 10 \
+    --resume checkpoints/latest.pth --checkpoint checkpoints/latest.pth
+```
+
+`--epoch` is the number of *additional* epochs to run on resume. The optimizer
+state, global step and network architecture are all restored from the
+checkpoint.
 
 ---
 
@@ -117,11 +148,26 @@ python -m pydlshogi2.player.mcts_player
 
 ### ONNX player
 
+The ONNX backend now uses the **same feature representation as the PyTorch
+backend**, so it plays models exported from this repository's own checkpoints.
+First export a trained checkpoint to ONNX:
+
+```bash
+python utils/export_onnx.py checkpoints/checkpoint.pth model/model.onnx
+```
+
+Then run the engine:
+
 ```bash
 python -m pydlshogi2.player.onnx_player
 # or
 ./onnx_player.sh
 ```
+
+> **Note:** the previously shipped `model/model-0000167.onnx` and
+> `model/model-0000225kai.onnx` are *dlshogi-format* models (two-input
+> `input1`/`input2` graph) and are **no longer compatible** with this player.
+> Export your own model from a `.pth` checkpoint as shown above.
 
 ### USI options
 
@@ -144,10 +190,65 @@ Connect the engine to any USI-compatible shogi GUI (e.g., Shogidokoro, ShogiGUI)
 
 ## Model Architecture
 
-- **Input:** 38 feature planes on a 9×9 board (piece positions + captured pieces for both sides)
-- **Backbone:** Convolutional layer → 10 ResNet blocks (192 channels, batch norm, ReLU)
-- **Policy head:** 1,629 move outputs (20 directions × 81 squares + hand drops)
+- **Input:** 104 feature planes on a 9×9 board (piece positions + captured pieces for both sides; `FEATURES_NUM`)
+- **Backbone:** Convolutional layer → ResNet blocks with optional Squeeze-and-Excitation (default 20 blocks × 256 channels, batch norm, ReLU)
+- **Policy head:** 2,187 move outputs (27 planes × 81 squares = 20 directions + 7 drop pieces; `MOVE_LABELS_NUM`)
 - **Value head:** Single sigmoid output (estimated win probability)
+
+The architecture (`--blocks`, `--channels`, `--fcl`, `--no_se`) is configurable
+and embedded in each checkpoint, so players and the ONNX exporter reconstruct it
+automatically. Checkpoints saved before this feature load as a legacy 10×192
+SE-free network.
+
+## Self-play Reinforcement Learning
+
+Generate self-play games and improve the model in a loop:
+
+```bash
+# one batch of self-play games (single process)
+python -m pydlshogi2.selfplay checkpoints/checkpoint.pth selfplay.hcpe \
+    --games 1000 --playouts 800 --gpu 0
+
+# parallel self-play (recommended): a single process is CPU-bound on the MCTS
+# tree and leaves the GPU idle; N workers sharing the GPU multiply throughput.
+WORKERS=8 GAMES=1000 PLAYOUTS=400 GPU=0 \
+    ./selfplay_parallel.sh checkpoints/checkpoint.pth selfplay.hcpe
+
+# full generate -> train -> promote loop (uses parallel self-play internally)
+WORKERS=8 ./rl_loop.sh checkpoints/checkpoint.pth
+```
+
+The RL loop honours `WORKERS`, `GAMES`, `PLAYOUTS`, `SELFPLAY_BATCHSIZE`,
+`ITERATIONS`, `EPOCHS`, `LR`, `VAL_LAMBDA`, `GPU` and `WORKDIR`.
+
+## Running on a GPU server (Vast.ai)
+
+One-shot bootstrap + background jobs on a fresh CUDA instance:
+
+```bash
+# 1) provision: venv + CUDA torch + deps + onnxruntime-gpu + editable install
+./vast_setup.sh
+
+# 2) launch a job in the background (auto-runs setup if needed).
+#    Logs to logs/<mode>-<timestamp>.log; survives SSH disconnects.
+./vast_run.sh train    train.hcpe test.hcpe --gpu 0 --amp        # supervised
+./vast_run.sh selfplay checkpoints/checkpoint.pth sp.hcpe --games 1000 --gpu 0
+./vast_run.sh rl       checkpoints/checkpoint.pth                # full self-play loop
+```
+
+Follow a job with `tail -f logs/<mode>-*.log` and stop it with
+`kill $(cat logs/<mode>.pid)`. The RL loop is tunable via environment variables
+(`ITERATIONS`, `GAMES`, `PLAYOUTS`, `EPOCHS`, `LR`, `VAL_LAMBDA`, `GPU`,
+`WORKDIR`).
+
+## Documentation
+
+API docs are generated from in-source reStructuredText docstrings with Sphinx:
+
+```bash
+pip install -r docs/requirements.txt
+sphinx-build -b html docs docs/_build/html   # or: cd docs && make html
+```
 
 ---
 
