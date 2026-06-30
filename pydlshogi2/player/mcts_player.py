@@ -9,6 +9,16 @@ from pydlshogi2.player.base_player import BasePlayer
 
 import time
 import math
+import os
+import sys
+
+def _resolve_model_path(path):
+    if os.path.isabs(path):
+        return path
+    if getattr(sys, 'frozen', False):
+        base = os.path.dirname(sys.executable)
+        return os.path.join(base, path)
+    return path
 
 # デフォルトGPU ID
 DEFAULT_GPU_ID = 0
@@ -78,7 +88,7 @@ class MCTSPlayer(BasePlayer):
     def __init__(self):
         super().__init__()
         # チェックポイントのパス
-        self.modelfile = self.DEFAULT_MODELFILE
+        self.modelfile = _resolve_model_path(self.DEFAULT_MODELFILE)
         # モデル
         self.model = None
         # 入力特徴量
@@ -136,7 +146,7 @@ class MCTSPlayer(BasePlayer):
 
     def setoption(self, args):
         if args[1] == 'modelfile':
-            self.modelfile = args[3]
+            self.modelfile = _resolve_model_path(args[3])
         elif args[1] == 'gpu_id':
             self.gpu_id = int(args[3])
         elif args[1] == 'batchsize':

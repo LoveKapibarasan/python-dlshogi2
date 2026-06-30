@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m venv .venv)",
+      "Bash(.venv/Scripts/pip install *)",
+      "Bash(.venv/Scripts/python *)",
+      "Bash(.venv/Scripts/pyinstaller --name onnx_player --onedir --collect-all numpy --collect-all onnxruntime --collect-all cshogi --hidden-import pydlshogi2 --hidden-import pydlshogi2.features --hidden-import pydlshogi2.network.policy_value_resnet --hidden-import pydlshogi2.uct.uct_node --hidden-import pydlshogi2.player.base_player --hidden-import pydlshogi2.player.mcts_player --hidden-import pydlshogi2.player.onnx_player pydlshogi2/player/onnx_player.py)",
+      "Bash(dist/onnx_player/onnx_player.exe)",
+      "Bash(xargs grep *)",
+      "Bash(.venv/Scripts/python.exe python-dlshogi2/utils/export_onnx.py rl/checkpoint-020.pth model/rl-020.onnx)",
+      "Bash(python3 -c \" import json with open\\('C:/Users/lovek/.claude/projects/C--Users-lovek-Documents-python-dlshogi2/20fa7a6c-5466-4a5a-9485-93ac58054faa.jsonl'\\) as f: for line in f: try: d = json.loads\\(line\\) msg = d.get\\('message', {}\\) if msg.get\\('role'\\) in \\('user', 'assistant'\\): content = msg.get\\('content', ''\\) if isinstance\\(content, list\\): for c in content: if isinstance\\(c, dict\\) and c.get\\('type'\\) == 'text': text = c.get\\('text', ''\\) if any\\(k in text for k in ['rl-0', 'export', 'pyinstaller', 'spec', 'build', 'Bundle', 'checkpoint', 'onnx']\\): print\\(f'[{msg[\\\\\"role\\\\\"]}]', text[:300]\\) print\\('---'\\) elif isinstance\\(content, str\\) and any\\(k in content for k in ['rl-0', 'export', 'pyinstaller', 'spec', 'build', 'Bundle']\\): print\\(f'[{msg[\\\\\"role\\\\\"]}]', content[:300]\\) print\\('---'\\) except: pass \")",
+      "Bash(python3 -c \" import json with open\\('C:/Users/lovek/.claude/projects/C--Users-lovek-Documents-python-dlshogi2/a1a0e679-460c-44b2-8f49-a2962f6b88cc.jsonl'\\) as f: for line in f: try: d = json.loads\\(line\\) msg = d.get\\('message', {}\\) if msg.get\\('role'\\) in \\('user', 'assistant'\\): content = msg.get\\('content', ''\\) if isinstance\\(content, list\\): for c in content: if isinstance\\(c, dict\\) and c.get\\('type'\\) == 'text': text = c.get\\('text', ''\\) if any\\(k in text for k in ['rl-0', 'export', 'pyinstaller', 'spec', 'build', 'Bundle', 'checkpoint', 'onnx', 'モデル']\\): print\\(f'[{msg[\\\\\"role\\\\\"]}]', text[:400]\\) print\\('---'\\) elif isinstance\\(content, str\\) and any\\(k in content for k in ['rl-0', 'export', 'pyinstaller', 'spec', 'build', 'Bundle', 'onnx']\\): print\\(f'[{msg[\\\\\"role\\\\\"]}]', content[:400]\\) print\\('---'\\) except: pass \")",
+      "Bash(.venv/Scripts/pyinstaller.exe onnx_player.spec)",
+      "Bash(.venv/Scripts/pyinstaller.exe -y onnx_player.spec)",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(./onnx_player.exe)"
+    ]
+  }
+}
