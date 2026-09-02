@@ -38,7 +38,7 @@ jobs:
 
       - name: Check shell scripts
         run: |
-          for script in *.sh wiki/*.sh; do
+          for script in *.sh wiki/*.sh dashboard/*.sh; do
               echo "checking $script"
               bash -n "$script"
           done

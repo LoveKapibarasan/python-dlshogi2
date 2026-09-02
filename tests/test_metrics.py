@@ -263,5 +263,50 @@ class MetricsStoreTest(unittest.TestCase):
             self.assertIsNone(metrics_store.read_checkpoint_network(path))
 
 
+class DashboardLauncherTest(unittest.TestCase):
+    """The launcher and its systemd unit have to agree with each other."""
+
+    RUN_SH = os.path.join(REPO_ROOT, 'dashboard', 'run.sh')
+    UNIT = os.path.join(REPO_ROOT, 'dashboard', 'dlshogi-dashboard.service')
+
+    def test_launcher_is_executable(self):
+        self.assertTrue(os.access(self.RUN_SH, os.X_OK))
+
+    def test_launcher_rejects_an_unknown_subcommand(self):
+        result = subprocess.run([self.RUN_SH, 'bogus'], cwd=REPO_ROOT,
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('usage:', result.stderr)
+
+    def test_status_reports_not_running_without_a_pid_file(self):
+        # PIDファイルの場所を差し替えられないので、既存のPIDファイルがある環境では
+        # このテストは意味を持たない。その場合はスキップする。
+        if os.path.exists(os.path.join(REPO_ROOT, 'logs', 'dashboard.pid')):
+            self.skipTest('a dashboard is running on this machine')
+        result = subprocess.run([self.RUN_SH, 'status'], cwd=REPO_ROOT,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('not running', result.stdout)
+
+    def test_systemd_unit_points_at_the_launcher(self):
+        with open(self.UNIT, encoding='utf-8') as f:
+            unit = f.read()
+        self.assertIn('ExecStart=__REPO__/dashboard/run.sh run', unit)
+        # sed で置換する前提のプレースホルダが両方の行に残っていること
+        self.assertIn('WorkingDirectory=__REPO__', unit)
+
+    def test_documented_defaults_match_the_script(self):
+        with open(self.RUN_SH, encoding='utf-8') as f:
+            script = f.read()
+        self.assertIn('PORT="${PORT:-8501}"', script)
+        self.assertIn('ADDRESS="${ADDRESS:-127.0.0.1}"', script)
+
+        with open(os.path.join(REPO_ROOT, 'wiki', 'Metrics-and-Dashboard.md'),
+                  encoding='utf-8') as f:
+            page = f.read()
+        self.assertIn('`8501`', page)
+        self.assertIn('`127.0.0.1`', page)
+
+
 if __name__ == '__main__':
     unittest.main()

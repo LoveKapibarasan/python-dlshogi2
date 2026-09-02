@@ -55,4 +55,6 @@ fi
 
 git commit --quiet -m "Sync wiki from $(git -C "$REPO_ROOT" rev-parse --short HEAD)"
 git push --quiet
-echo "published to ${WIKI_URL%.wiki.git}/wiki"
+# WIKI_URLはSSH形式のこともあるので、案内は常にhttpsのwiki URLで出す
+SLUG="$(git -C "$REPO_ROOT" remote get-url origin | sed -E 's#(git@github\.com:|https://github\.com/)##; s#\.git$##')"
+echo "published to https://github.com/$SLUG/wiki"

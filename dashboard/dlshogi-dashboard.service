@@ -1,0 +1,38 @@
+# systemd unit for the metrics dashboard.
+#
+# Install as a user service (no root needed, starts on login):
+#
+#   mkdir -p ~/.config/systemd/user
+#   sed "s|__REPO__|$PWD|g" dashboard/dlshogi-dashboard.service \
+#       > ~/.config/systemd/user/dlshogi-dashboard.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now dlshogi-dashboard
+#   systemctl --user status dlshogi-dashboard
+#   journalctl --user -u dlshogi-dashboard -f
+#
+# To keep it running after logout: sudo loginctl enable-linger $USER
+#
+# For a system-wide service, put it in /etc/systemd/system/ instead and add a
+# User= line; then use systemctl without --user.
+#
+# run.sh binds 127.0.0.1 by default — the dashboard has no authentication.
+# Reach a remote one with `ssh -L 8501:127.0.0.1:8501 <host>` rather than
+# setting Environment=ADDRESS=0.0.0.0.
+
+[Unit]
+Description=python-dlshogi2 metrics dashboard
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO__
+ExecStart=__REPO__/dashboard/run.sh run
+Environment=PORT=8501
+Environment=ADDRESS=127.0.0.1
+Environment=METRICS_DIR=metrics
+Environment=CHECKPOINT_DIR=checkpoints
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
