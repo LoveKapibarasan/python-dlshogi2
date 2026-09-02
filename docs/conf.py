@@ -17,6 +17,8 @@ import sys
 
 # プロジェクトルートをimportパスに追加
 sys.path.insert(0, os.path.abspath('..'))
+# dashboard/ はパッケージではなくスクリプト置き場なので個別に追加する
+sys.path.insert(0, os.path.abspath('../dashboard'))
 
 # -- Project information -----------------------------------------------------
 project = 'python-dlshogi2'

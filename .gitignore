@@ -224,3 +224,6 @@ __marimo__/
 
 # runtime job logs (vast_run.sh)
 logs/
+
+# structured run metrics (dashboard/app.py reads these; runs are not artifacts)
+metrics/

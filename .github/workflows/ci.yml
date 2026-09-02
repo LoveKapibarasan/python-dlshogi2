@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # tests/ は標準ライブラリのみで動くので、torch/cshogiを入れずに実行できる
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # torch/cshogi無しではimportできないため、構文チェックに留める
+      - name: Byte-compile every module
+        run: python -m compileall -q pydlshogi2 utils human dashboard tests
+
+      - name: Check shell scripts
+        run: |
+          for script in *.sh wiki/*.sh; do
+              echo "checking $script"
+              bash -n "$script"
+          done

@@ -41,6 +41,7 @@ from cshogi import (
 )
 
 from pydlshogi2.player.mcts_player import MCTSPlayer
+from pydlshogi2.metrics import MetricsWriter, gpu_name
 
 # 評価値クリッピング上限 (16bit格納のため)
 EVAL_CLIP = 32767
@@ -242,11 +243,22 @@ def main():
     parser.add_argument('--batchsize', type=int, default=32, help='inference batch size')
     parser.add_argument('--seed', type=int, default=None,
                         help='random seed (set a distinct value per parallel worker)')
+    parser.add_argument('--metrics', default=None,
+                        help='JSON Lines file to append per-game statistics and '
+                             'run metadata to; read by dashboard/app.py')
+    parser.add_argument('--iteration', type=int, default=None,
+                        help='RL loop iteration this run belongs to (recorded in '
+                             'the metrics file so the dashboard can group workers)')
     args = parser.parse_args()
 
     # 並列ワーカーが同一局を量産しないようシードを設定する
     if args.seed is not None:
         np.random.seed(args.seed)
+
+    metrics = MetricsWriter(
+        args.metrics, kind='selfplay', args=vars(args),
+        extra={'iteration': args.iteration, 'worker': args.seed,
+               'gpu_name': gpu_name(args.gpu)})
 
     engine = SelfPlayEngine(dirichlet_alpha=args.dirichlet_alpha, noise_eps=args.noise_eps)
     engine.modelfile = args.modelfile
@@ -255,12 +267,24 @@ def main():
     engine.isready()
 
     total_positions = 0
+    result_counts = {BLACK_WIN: 0, WHITE_WIN: 0, DRAW: 0}
+    played_games = 0
+    started = time.time()
     with open(args.output, 'wb') as f:
         for g in range(args.games):
+            game_started = time.time()
             records, game_result = play_game(
                 engine, args.playouts, args.max_moves, args.temperature, args.temp_cutoff)
+            game_elapsed = time.time() - game_started
             if not records:
                 continue
+
+            played_games += 1
+            result_counts[game_result] = result_counts.get(game_result, 0) + 1
+            metrics.metric(scope='game', game=g + 1, iteration=args.iteration,
+                           worker=args.seed, moves=len(records),
+                           game_result=int(game_result), seconds=game_elapsed,
+                           positions=total_positions + len(records))
 
             hcpes = np.zeros(len(records), HuffmanCodedPosAndEval)
             for i, (hcp, bestmove16, eval_black) in enumerate(records):
@@ -273,6 +297,18 @@ def main():
             total_positions += len(records)
             print('game {}/{} moves={} result={} total_positions={}'.format(
                 g + 1, args.games, len(records), game_result, total_positions), flush=True)
+
+    elapsed = time.time() - started
+    metrics.metric(scope='summary', iteration=args.iteration, worker=args.seed,
+                   games=played_games, positions=total_positions,
+                   black_wins=result_counts.get(BLACK_WIN, 0),
+                   white_wins=result_counts.get(WHITE_WIN, 0),
+                   draws=result_counts.get(DRAW, 0),
+                   mean_moves=(total_positions / played_games) if played_games else 0.0,
+                   seconds=elapsed,
+                   games_per_hour=(played_games / elapsed * 3600.0) if elapsed > 0 else 0.0,
+                   playouts=args.playouts)
+    metrics.close(status='completed')
 
     print('done. games={} positions={}'.format(args.games, total_positions))
 

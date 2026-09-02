@@ -19,6 +19,7 @@ python-dlshogi2 trains a ResNet-based neural network on shogi game records, then
 - Ponder support (thinking during opponent's turn)
 - PyTorch and ONNX (CUDA/TensorRT) inference backends
 - Resignation based on configurable win-rate threshold
+- Structured (JSON Lines) run metrics and a Streamlit dashboard for the training history
 - Sphinx API documentation generated from in-source docstrings
 
 ---
@@ -113,6 +114,8 @@ python -m pydlshogi2.train train.hcpe test.hcpe \
 | `--compile` | off | Wrap model with `torch.compile` |
 | `--save_interval` | 0 | Save a checkpoint every N steps (0 = epoch end only) |
 | `--resume` | — | Resume from a checkpoint (model + optimizer + step + architecture) |
+| `--metrics` | — | Append structured metrics (JSON Lines) for the [dashboard](#dashboard) |
+| `--run_id` | — | Reuse a run id so a preempted run and its resumes stay one run |
 
 ### Interrupting & resuming (preemptible instances)
 
@@ -176,9 +179,12 @@ python -m pydlshogi2.player.onnx_player
 | `modelfile` | — | Path to checkpoint or ONNX model |
 | `gpu_id` | 0 | GPU ID (-1 for CPU) |
 | `batchsize` | 32 | Neural network batch size |
-| `resign_threshold` | 5 | Win rate (%) below which to resign |
-| `c_puct` | 1.0 | MCTS exploration constant |
-| `temperature` | 1.0 | Policy softmax temperature |
+| `resign_threshold` | 1 | Win rate (%) below which to resign |
+| `c_puct` | 100 | MCTS exploration constant, as a percentage (100 = 1.0) |
+| `c_base` | 19652 | Base of the PUCT log term |
+| `fpu_reduction` | 27 | First Play Urgency reduction, as a percentage (27 = 0.27) |
+| `temperature` | 100 | Policy softmax temperature, as a percentage (100 = 1.0) |
+| `mate_root_ply` | 7 | Depth of the one-shot root mate search (1-31) |
 | `time_margin` | 1000 | Time margin in milliseconds |
 | `byoyomi_margin` | 100 | Byoyomi margin in milliseconds |
 | `pv_interval` | 500 | PV info output interval (ms) |
@@ -219,7 +225,63 @@ WORKERS=8 ./rl_loop.sh checkpoints/checkpoint.pth
 ```
 
 The RL loop honours `WORKERS`, `GAMES`, `PLAYOUTS`, `SELFPLAY_BATCHSIZE`,
-`ITERATIONS`, `EPOCHS`, `LR`, `VAL_LAMBDA`, `GPU` and `WORKDIR`.
+`ITERATIONS`, `EPOCHS`, `LR`, `VAL_LAMBDA`, `GPU`, `WORKDIR` and
+`METRICS_DIR`. It writes dashboard metrics to `$WORKDIR/metrics` by default —
+self-play statistics per iteration, the training curve of each iteration, and
+the loop's own iteration log.
+
+## Dashboard
+
+A Streamlit dashboard turns the run history into something you can browse:
+which runs happened, on which commit and hyper-parameters, how the losses moved
+and what the self-play loop produced.
+
+```bash
+pip install -r dashboard/requirements.txt
+streamlit run dashboard/app.py
+```
+
+Metrics have to be recorded first — pass `--metrics` to training and self-play,
+or just run `rl_loop.sh`, which wires it up for you:
+
+```bash
+# supervised training with metrics
+python -m pydlshogi2.train train.hcpe test.hcpe --gpu 0 --epoch 10 \
+    --checkpoint checkpoints/checkpoint-{epoch:03}.pth \
+    --metrics metrics/train-sl.jsonl
+
+# self-play with metrics
+python -m pydlshogi2.selfplay checkpoints/checkpoint.pth selfplay.hcpe \
+    --games 1000 --metrics metrics/selfplay.jsonl
+
+# the RL loop records everything under $WORKDIR/metrics automatically
+WORKERS=8 ./rl_loop.sh checkpoints/checkpoint.pth
+```
+
+The dashboard scans a directory recursively for `*.jsonl`, so point it at
+whichever directory holds your runs:
+
+```bash
+DLSHOGI_METRICS_DIR=rl/metrics DLSHOGI_CHECKPOINT_DIR=checkpoints \
+    streamlit run dashboard/app.py
+```
+
+| Tab | Contents |
+|-----|----------|
+| Runs | Every run with its start time, git commit, host/GPU, hyper-parameters, last step and final accuracy |
+| 学習曲線 | Train/test loss and policy/value accuracy for several runs overlaid on a step axis |
+| RL ループ | Per-iteration self-play statistics (games, win/draw split, mean game length) and the artifacts each iteration produced |
+| チェックポイント | Model files with size and mtime, plus the architecture embedded in a `.pth` |
+
+Metrics are **JSON Lines**, one file per run, flushed on every write — a run
+killed by a preemption still leaves a readable history. Each file opens with a
+record describing the run (all arguments, git commit and dirty flag, hostname,
+GPU) followed by metric samples and events such as checkpoint saves. Because the
+files live next to the checkpoints, retrieving them from a remote GPU box is the
+same `scp` you already do. See `pydlshogi2/metrics.py` for the schema.
+
+The dashboard's dependencies are kept in `dashboard/requirements.txt`, separate
+from the engine's, so training and playing stay free of them.
 
 ## Running on a GPU server (Vast.ai)
 
@@ -248,6 +310,17 @@ API docs are generated from in-source reStructuredText docstrings with Sphinx:
 ```bash
 pip install -r docs/requirements.txt
 sphinx-build -b html docs docs/_build/html   # or: cd docs && make html
+```
+
+The [project Wiki](https://github.com/LoveKapibarasan/python-dlshogi2/wiki)
+covers the parts that fit neither the README nor the API reference: why the
+network and the search are built the way they are, environment-specific
+operating procedures, and the running experiment log.
+
+Tests (standard library only — no torch or cshogi needed):
+
+```bash
+python -m unittest discover -s tests
 ```
 
 ---

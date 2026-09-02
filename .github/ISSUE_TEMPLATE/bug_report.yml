@@ -1,0 +1,67 @@
+name: Bug report
+description: Something behaves differently from what the docs say
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [Troubleshooting](https://github.com/LoveKapibarasan/python-dlshogi2/wiki/Troubleshooting)
+        first — several recurring surprises (legacy checkpoints loading as 10x192,
+        the bundled dlshogi-format ONNX models, `--blocks` ignored on `--resume`)
+        are documented there as intended behaviour.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you observed, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: The exact command, including its arguments.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output
+      description: The traceback, or the relevant part of the log. Trim it to what matters.
+      render: shell
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Training (pydlshogi2.train)
+        - Data conversion (utils/, human/)
+        - Self-play / RL loop
+        - Player (PyTorch)
+        - Player (ONNX)
+        - Dashboard / metrics
+        - Docs / wiki
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python, torch, GPU, and how it was launched (local / Colab / Vast.ai).
+      placeholder: |
+        Ubuntu 24.04, Python 3.12, torch 2.6.0+cu124, RTX 4090, Vast.ai via ./vast_run.sh
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: "`git rev-parse --short HEAD`. If you have a metrics file, its run record has this."
