@@ -33,7 +33,24 @@ jobs:
       - name: Verify the wiki sources
         run: python -m unittest tests.test_wiki_links -v
 
+      # Wikiは最初の1ページがブラウザで作られるまでgitリポジトリが存在しない。
+      # 未初期化を「壊れている」と報告しても直せないので、警告にとどめる。
+      - name: Check that the wiki repository exists
+        id: probe
+        env:
+          WIKI_URL: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.wiki.git
+        run: |
+          if git ls-remote "$WIKI_URL" >/dev/null 2>&1; then
+              echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+              echo "exists=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::The wiki has no pages yet, so its git repository does not exist. \
+          Create one page at https://github.com/${{ github.repository }}/wiki (it will be \
+          overwritten) and re-run this workflow."
+          fi
+
       - name: Publish
+        if: steps.probe.outputs.exists == 'true'
         env:
           WIKI_URL: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.wiki.git
         run: |
