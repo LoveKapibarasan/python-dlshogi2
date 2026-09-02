@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Design background and operating procedures
+    url: https://github.com/LoveKapibarasan/python-dlshogi2/wiki
+    about: The wiki covers why the network and search are built this way, environment setup, and the experiment log.
+  - name: API reference
+    url: https://github.com/LoveKapibarasan/python-dlshogi2/tree/main/docs
+    about: Generated from the in-source docstrings. Build with sphinx-build -b html docs docs/_build/html.

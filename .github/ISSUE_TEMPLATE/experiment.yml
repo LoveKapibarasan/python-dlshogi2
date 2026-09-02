@@ -1,0 +1,60 @@
+name: Experiment
+description: Plan or record a training / self-play experiment
+labels: [experiment]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One issue per experiment. When it finishes, copy the conclusion into the
+        wiki's [Experiment Log](https://github.com/LoveKapibarasan/python-dlshogi2/wiki/Experiment-Log)
+        and close this.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What is this run supposed to find out? A run with no question is just spent GPU time.
+      placeholder: Does val_lambda 0.5 beat 0.333 on the same data?
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: Include `--metrics` so the run lands in the dashboard.
+      render: shell
+      placeholder: |
+        python -m pydlshogi2.train train.hcpe test.hcpe --gpu 0 --epoch 10 \
+            --batchsize 1024 --lr 0.01 --val_lambda 0.5 --amp \
+            --checkpoint checkpoints/checkpoint-{epoch:03}.pth \
+            --metrics metrics/val-lambda-05.jsonl
+    validations:
+      required: true
+
+  - type: textarea
+    id: data
+    attributes:
+      label: Data
+      description: Source, filters and position counts.
+      placeholder: Floodgate 2020, rating >= 3500, >= 50 moves — 12.0M train / 1.3M test
+    validations:
+      required: true
+
+  - type: input
+    id: baseline
+    attributes:
+      label: Baseline
+      description: The run_id this should be compared against.
+
+  - type: input
+    id: run-id
+    attributes:
+      label: run_id
+      description: Fill in once the run starts; it recovers the full command, commit, host and GPU from the metrics.
+
+  - type: textarea
+    id: result
+    attributes:
+      label: Result and conclusion
+      description: Fill in when it finishes. Negative results are worth recording.

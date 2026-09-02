@@ -1,0 +1,37 @@
+name: Feature request
+description: Propose a change to the engine, the pipeline or the tooling
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is hard or impossible today? Describe the situation, not the solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What you would build, and roughly how.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including doing nothing, and why that is not enough.
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Affects
+      options:
+        - label: Training
+        - label: Self-play / RL loop
+        - label: Player / USI
+        - label: Data tooling
+        - label: Dashboard / metrics
+        - label: Docs / wiki

@@ -1,0 +1,42 @@
+# Mirror wiki/*.md to the GitHub wiki whenever they change on main.
+#
+# The wiki is a separate git repository; GITHUB_TOKEN can push to it with
+# `contents: write`. The source of truth stays in wiki/ in this repository, so
+# edits made in the browser are overwritten by the next run.
+#
+# A GitHub wiki repository does not exist until the wiki has at least one page.
+# On a fresh repository, create any page once in the browser (it gets
+# overwritten) or this job will fail to clone.
+name: Publish wiki
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'wiki/**'
+      - '.github/workflows/wiki.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-wiki
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify the wiki sources
+        run: python -m unittest tests.test_wiki_links -v
+
+      - name: Publish
+        env:
+          WIKI_URL: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.wiki.git
+        run: |
+          git config --global user.name  'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          ./wiki/publish.sh

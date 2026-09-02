@@ -7,6 +7,7 @@ import torch.optim as optim
 
 from pydlshogi2.network.policy_value_resnet import build_network, LEGACY_NETWORK_CONFIG
 from pydlshogi2.dataloader import HcpeDataLoader
+from pydlshogi2.metrics import MetricsWriter, gpu_name
 
 parser = argparse.ArgumentParser(description='Train policy value network')
 parser.add_argument('train_data', type=str, nargs='+', help='training data file')
@@ -28,6 +29,14 @@ parser.add_argument('--save_interval', type=int, default=0,
                     help='save a checkpoint every N steps (0 = only at epoch end); '
                          'useful for resuming after a preemption mid-epoch')
 parser.add_argument('--log', default=None, help='log file path')
+parser.add_argument('--metrics', default=None,
+                    help='JSON Lines file to append structured metrics to '
+                         '(loss/accuracy per eval interval, run metadata); '
+                         'read by dashboard/app.py')
+parser.add_argument('--run_id', default=None,
+                    help='reuse this run id in the metrics file instead of '
+                         'generating a new one (use it to keep a preempted '
+                         'run and its resumes as a single run)')
 # ネットワーク構成 (resume時はチェックポイントの構成を優先)
 parser.add_argument('--blocks', type=int, default=20, help='number of residual blocks')
 parser.add_argument('--channels', type=int, default=256, help='channel width')
@@ -60,6 +69,12 @@ if args.gpu >= 0:
     device = torch.device(f"cuda:{args.gpu}")
 else:
     device = torch.device("cpu")
+
+# 構造化メトリクス出力 (--metrics 未指定時は何もしないダミーになる)
+metrics = MetricsWriter(
+    args.metrics, kind='train', args=vars(args), run_id=args.run_id,
+    extra={'device': str(device), 'gpu_name': gpu_name(args.gpu)})
+logging.info('metrics run_id={}'.format(metrics.run_id))
 
 # ネットワーク構成 (resume時はチェックポイントの構成を優先)
 if args.resume:
@@ -117,6 +132,11 @@ test_dataloader = HcpeDataLoader(args.test_data, args.testbatchsize, device,
 # 読み込んだデータ数を表示
 logging.info('train position num = {}'.format(len(train_dataloader)))
 logging.info('test position num = {}'.format(len(test_dataloader)))
+metrics.event('data_loaded',
+              train_positions=len(train_dataloader),
+              test_positions=len(test_dataloader),
+              network=network_config,
+              start_epoch=epoch, start_step=t)
 
 # 方策の正解率
 def accuracy(y, t):
@@ -140,6 +160,7 @@ def save_checkpoint():
         'network': network_config,
     }
     torch.save(checkpoint, path)
+    metrics.event('checkpoint', path=path, epoch=epoch, step=t)
 
 
 # 訓練ループ
@@ -173,6 +194,7 @@ for e in range(args.epoch):
         if interrupted:
             if args.checkpoint:
                 save_checkpoint()
+            metrics.close(status='interrupted', epoch=epoch, step=t)
             sys.exit(0)
 
         # ステップ間隔ごとのチェックポイント保存 (preemption対策)
@@ -211,6 +233,22 @@ for e in range(args.epoch):
                     test_loss_policy + test_loss_value,
                     test_accuracy_policy,
                     test_accuracy_value))
+
+                # 同じ値を機械可読な形式でも残す
+                metrics.metric(
+                    scope='interval',
+                    epoch=epoch,
+                    step=t,
+                    lr=optimizer.param_groups[0]['lr'],
+                    train_loss_policy=sum_loss_policy_interval / steps_interval,
+                    train_loss_value=sum_loss_value_interval / steps_interval,
+                    train_loss_total=(sum_loss_policy_interval
+                                      + sum_loss_value_interval) / steps_interval,
+                    test_loss_policy=test_loss_policy,
+                    test_loss_value=test_loss_value,
+                    test_loss_total=test_loss_policy + test_loss_value,
+                    test_accuracy_policy=test_accuracy_policy,
+                    test_accuracy_value=test_accuracy_value)
 
             # エポックごとのステップ数カウンタと損失合計に加算
             steps_epoch += steps_interval
@@ -256,6 +294,22 @@ for e in range(args.epoch):
         sum_test_accuracy_policy / test_steps,
         sum_test_accuracy_value / test_steps))
 
+    metrics.metric(
+        scope='epoch',
+        epoch=epoch,
+        step=t,
+        lr=optimizer.param_groups[0]['lr'],
+        train_loss_policy=sum_loss_policy_epoch / steps_epoch,
+        train_loss_value=sum_loss_value_epoch / steps_epoch,
+        train_loss_total=(sum_loss_policy_epoch + sum_loss_value_epoch) / steps_epoch,
+        test_loss_policy=sum_test_loss_policy / test_steps,
+        test_loss_value=sum_test_loss_value / test_steps,
+        test_loss_total=(sum_test_loss_policy + sum_test_loss_value) / test_steps,
+        test_accuracy_policy=sum_test_accuracy_policy / test_steps,
+        test_accuracy_value=sum_test_accuracy_value / test_steps)
+
     # チェックポイント保存
     if args.checkpoint:
         save_checkpoint()
+
+metrics.close(status='completed', epoch=epoch, step=t)

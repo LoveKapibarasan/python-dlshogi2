@@ -16,6 +16,7 @@ from the in-source docstrings.
    guides/training
    guides/selfplay
    guides/playing
+   guides/dashboard
 
 .. toctree::
    :maxdepth: 2
@@ -27,6 +28,7 @@ from the in-source docstrings.
    api/selfplay
    api/players
    api/uct
+   api/metrics
    api/utils
 
 Indices and tables

@@ -16,6 +16,9 @@
 #   BATCHSIZE  inference batch size per worker       (default 32)
 #   GPU        GPU id (-1 for CPU)                   (default 0)
 #   PYTHON     interpreter                           (default python)
+#   METRICS_PREFIX  when set, worker w appends structured metrics to
+#                   "<prefix>-w<w>.jsonl" (read by dashboard/app.py)
+#   ITERATION       RL loop iteration number recorded in those metrics
 set -e
 
 MODEL="${1:?usage: selfplay_parallel.sh <model.pth> <output.hcpe> [args...]}"
@@ -28,6 +31,8 @@ PLAYOUTS="${PLAYOUTS:-400}"
 BATCHSIZE="${BATCHSIZE:-32}"
 GPU="${GPU:-0}"
 PYTHON="${PYTHON:-python}"
+METRICS_PREFIX="${METRICS_PREFIX:-}"
+ITERATION="${ITERATION:-}"
 
 # 各ワーカーが受け持つ局数 (端数は切り上げ)
 PER=$(( (GAMES + WORKERS - 1) / WORKERS ))
@@ -37,9 +42,16 @@ trap 'rm -rf "$TMPDIR"' EXIT
 echo "spawning $WORKERS workers x $PER games (playouts=$PLAYOUTS batchsize=$BATCHSIZE gpu=$GPU)"
 pids=()
 for w in $(seq 0 $((WORKERS - 1))); do
+    metrics_args=()
+    if [ -n "$METRICS_PREFIX" ]; then
+        metrics_args+=(--metrics "${METRICS_PREFIX}-w${w}.jsonl")
+    fi
+    if [ -n "$ITERATION" ]; then
+        metrics_args+=(--iteration "$ITERATION")
+    fi
     "$PYTHON" -m pydlshogi2.selfplay "$MODEL" "$TMPDIR/w$w.hcpe" \
         --games "$PER" --playouts "$PLAYOUTS" --batchsize "$BATCHSIZE" \
-        --gpu "$GPU" --seed "$w" "$@" > "$TMPDIR/w$w.log" 2>&1 &
+        --gpu "$GPU" --seed "$w" "${metrics_args[@]}" "$@" > "$TMPDIR/w$w.log" 2>&1 &
     pids+=($!)
 done
 
