@@ -90,6 +90,57 @@ original id.
 ## The dashboard
 
 ```bash
+./dashboard/run.sh          # http://127.0.0.1:8501
+```
+
+`run.sh` builds its own virtual environment under `dashboard/.venv` on first
+use, so Streamlit, pandas and altair never land in the environment used for
+training or playing.
+
+As a background service:
+
+```bash
+./dashboard/run.sh start    # survives an SSH disconnect; logs/dashboard.log
+./dashboard/run.sh status
+./dashboard/run.sh restart
+./dashboard/run.sh stop
+```
+
+| Variable | Default | |
+|----------|---------|--|
+| `PORT` | `8501` | Streamlit's own default |
+| `ADDRESS` | `127.0.0.1` | localhost only — see below |
+| `METRICS_DIR` | `metrics` | scanned recursively for `*.jsonl` |
+| `CHECKPOINT_DIR` | `checkpoints` | |
+| `VENV` | `dashboard/.venv` | |
+| `PYTHON` | `python3` | interpreter used to build the venv |
+
+**The dashboard has no authentication**, which is why it binds to `127.0.0.1`.
+To view one running on a GPU box, forward the port rather than opening it up:
+
+```bash
+ssh -L 8501:127.0.0.1:8501 <host>
+```
+
+`ADDRESS=0.0.0.0` is for networks you control.
+
+For a dashboard that survives reboots, `dashboard/dlshogi-dashboard.service` is
+a systemd unit template — install it as a *user* service (no root required):
+
+```bash
+mkdir -p ~/.config/systemd/user
+sed "s|__REPO__|$PWD|g" dashboard/dlshogi-dashboard.service \
+    > ~/.config/systemd/user/dlshogi-dashboard.service
+systemctl --user daemon-reload
+systemctl --user enable --now dlshogi-dashboard
+journalctl --user -u dlshogi-dashboard -f
+```
+
+Add `sudo loginctl enable-linger $USER` to keep it running after logout.
+
+Or run Streamlit directly, if you would rather manage the environment yourself:
+
+```bash
 pip install -r dashboard/requirements.txt
 streamlit run dashboard/app.py
 ```

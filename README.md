@@ -237,6 +237,30 @@ which runs happened, on which commit and hyper-parameters, how the losses moved
 and what the self-play loop produced.
 
 ```bash
+./dashboard/run.sh          # http://127.0.0.1:8501
+```
+
+The launcher builds its own virtual environment on first use, so Streamlit never
+lands in the environment used for training or playing. To run it as a background
+service instead:
+
+```bash
+./dashboard/run.sh start    # survives an SSH disconnect; logs to logs/dashboard.log
+./dashboard/run.sh status
+./dashboard/run.sh stop
+```
+
+`PORT` (default **8501**), `ADDRESS` (default `127.0.0.1`), `METRICS_DIR` and
+`CHECKPOINT_DIR` are environment variables. The dashboard has no
+authentication, so it binds to localhost — view a remote one over an SSH tunnel
+(`ssh -L 8501:127.0.0.1:8501 <host>`) rather than setting `ADDRESS=0.0.0.0`.
+
+`dashboard/dlshogi-dashboard.service` is a systemd unit template for keeping it
+running across reboots; the installation commands are in its header comment.
+
+Or run Streamlit yourself:
+
+```bash
 pip install -r dashboard/requirements.txt
 streamlit run dashboard/app.py
 ```
