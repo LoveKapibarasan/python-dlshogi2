@@ -24,15 +24,15 @@ run and how to read its verdict.
 
 | ID | 改善案 | 種別 | 期待 Elo | コスト | 状態 | Issue |
 |----|--------|------|----------|--------|------|-------|
-| EXP-001 | `select_max_ucb_child` の numpy 呼び出し削減と訪問済み方策和の差分更新 | search | +30〜60 (固定時間) | 小 | 計測中 | — |
-| EXP-002 | MCTS solver: 証明済みの勝ち/負けを親へ厳密に伝播する | search | +20〜60 | 中 | 未着手 | — |
-| EXP-003 | `rl_loop.sh` に昇格ゲートを入れる (前チェックポイントに勝てなければ昇格しない) | pipeline | 退行の防止 | 小 | 未着手 | — |
-| EXP-004 | 探索パラメータ (`c_puct` / `fpu_reduction` / `temperature`) の総当たり調整 | tuning | +0〜80 | 中 (GPU時間) | 未着手 | — |
-| EXP-005 | `batchsize` と virtual loss の見直し | tuning | +0〜30 | 小 | 未着手 | — |
-| EXP-006 | 局面評価の呼び出し経路を JIT 化する (numba / Cython) | search | +60〜120 | 中 | 未着手 | — |
-| EXP-007 | 特徴量生成と `make_move_label` のベクトル化 | search | +5〜15 | 小 | 未着手 | — |
-| EXP-008 | 詰み探索の深さをルート以外にも広げる | search | +10〜40 | 中 | 未着手 | — |
-| EXP-009 | ネットワークの再学習 (20×256 SE, Floodgate 全体) | training | +200 以上 | 大 (GPU が足りない) | 保留 | — |
+| EXP-001 | `select_max_ucb_child` の numpy 呼び出し削減と訪問済み方策和の差分更新 | search | +30〜60 (固定時間) | 小 | 計測中 | [#5](https://github.com/LoveKapibarasan/python-dlshogi2/issues/5) |
+| EXP-002 | MCTS solver: 証明済みの勝ち/負けを親へ厳密に伝播する | search | +20〜60 | 中 | 未着手 | [#6](https://github.com/LoveKapibarasan/python-dlshogi2/issues/6) |
+| EXP-003 | `rl_loop.sh` に昇格ゲートを入れる (前チェックポイントに勝てなければ昇格しない) | pipeline | 退行の防止 | 小 | 未着手 | [#7](https://github.com/LoveKapibarasan/python-dlshogi2/issues/7) |
+| EXP-004 | 探索パラメータ (`c_puct` / `fpu_reduction` / `temperature`) の総当たり調整 | tuning | +0〜80 | 中 (GPU時間) | 未着手 | [#8](https://github.com/LoveKapibarasan/python-dlshogi2/issues/8) |
+| EXP-005 | `batchsize` と virtual loss の見直し | tuning | +0〜30 | 小 | 未着手 | [#9](https://github.com/LoveKapibarasan/python-dlshogi2/issues/9) |
+| EXP-006 | 局面評価の呼び出し経路を JIT 化する (numba / Cython) | search | +60〜120 | 中 | 未着手 | [#10](https://github.com/LoveKapibarasan/python-dlshogi2/issues/10) |
+| EXP-007 | 特徴量生成と `make_move_label` のベクトル化 | search | +5〜15 | 小 | 未着手 | [#11](https://github.com/LoveKapibarasan/python-dlshogi2/issues/11) |
+| EXP-008 | 詰み探索の深さをルート以外にも広げる | search | +10〜40 | 中 | 未着手 | [#12](https://github.com/LoveKapibarasan/python-dlshogi2/issues/12) |
+| EXP-009 | ネットワークの再学習 (20×256 SE, Floodgate 全体) | training | +200 以上 | 大 (GPU が足りない) | 保留 | [#13](https://github.com/LoveKapibarasan/python-dlshogi2/issues/13) |
 
 ## なぜこの順番なのか
 
