@@ -19,6 +19,7 @@ python-dlshogi2 trains a ResNet-based neural network on shogi game records, then
 - Ponder support (thinking during opponent's turn)
 - PyTorch and ONNX (CUDA/TensorRT) inference backends
 - Resignation based on configurable win-rate threshold
+- Engine-vs-engine match arena with Elo, confidence intervals and SPRT early stopping
 - Structured (JSON Lines) run metrics and a Streamlit dashboard for the training history
 - Sphinx API documentation generated from in-source docstrings
 
@@ -185,6 +186,7 @@ python -m pydlshogi2.player.onnx_player
 | `fpu_reduction` | 27 | First Play Urgency reduction, as a percentage (27 = 0.27) |
 | `temperature` | 100 | Policy softmax temperature, as a percentage (100 = 1.0) |
 | `mate_root_ply` | 7 | Depth of the one-shot root mate search (1-31) |
+| `playouts` | 1000 | Playouts for a `go` with no time control (used by fixed-playout matches) |
 | `time_margin` | 1000 | Time margin in milliseconds |
 | `byoyomi_margin` | 100 | Byoyomi margin in milliseconds |
 | `pv_interval` | 500 | PV info output interval (ms) |
@@ -229,6 +231,68 @@ The RL loop honours `WORKERS`, `GAMES`, `PLAYOUTS`, `SELFPLAY_BATCHSIZE`,
 `METRICS_DIR`. It writes dashboard metrics to `$WORKDIR/metrics` by default —
 self-play statistics per iteration, the training curve of each iteration, and
 the loop's own iteration log.
+
+## Evaluation: does the change actually help?
+
+Training curves say a model fits its data. They do not say it plays better, and
+a change to the *search* moves no loss at all. The only instrument for that is a
+match:
+
+```bash
+# 1. build an opening book (once). The search is deterministic, so without one
+#    every game of the "match" is a replay of the first.
+python utils/make_opening_book.py checkpoints/checkpoint.pth openings.txt \
+    --lines 64 --plies 12
+
+# 2. put a branch across the board from main
+git worktree add ../wt-main main
+
+python -m pydlshogi2.match \
+    --engine1 ./usi_engine.sh          --name1 branch \
+    --engine2 ../wt-main/usi_engine.sh --name2 main \
+    --options1 modelfile=checkpoints/checkpoint.pth \
+    --options2 modelfile=checkpoints/checkpoint.pth \
+    --games 100 --byoyomi 1000 --opening openings.txt --sprt \
+    --metrics metrics/match-EXP-001.jsonl --experiment EXP-001 --issue 7
+```
+
+```
+=== match result: branch vs main ===
+games      : 64 (stopped early by SPRT)
+W-L-D      : 24-14-26
+pairs      : 32 scored as [0, 1/2, 1, 1 1/2, 2] = [1, 5, 12, 11, 3]
+Elo        : +54.7 +/- 41.2   95% CI [+14.1, +96.6]
+LOS        : 96.4%
+SPRT       : llr=+2.981 bounds=[-2.944, 2.944] H0=0 H1=20 -> accept
+verdict    : engine1 is stronger; adopt the change
+```
+
+`./match.sh EXP-001 --engine1 ... --engine2 ...` runs the same thing in the
+background with the log and metrics paths filled in for you.
+
+Three things are worth knowing before trusting a number:
+
+- **100 games is less than it looks.** Counting games one by one, the 95 %
+  interval over 100 games is about **±70 Elo** — "55-45, so it's better" is not a
+  result. `--sprt` stops as soon as the answer is clear in either direction, and
+  scoring colour-swapped *pairs* (the default) roughly halves the games needed.
+- **`--playouts` and `--byoyomi` measure different things.** Fixed playouts
+  compare two models independently of speed; fixed time is the only condition
+  under which a faster search can show up as strength. A pure speed-up *must*
+  score 50 % at fixed playouts — that is the proof it changed no behaviour.
+- **The engines must differ.** Both sides are launched from a checkout via
+  `usi_engine.sh`, so comparing branches means pointing them at two git
+  worktrees.
+
+`pydlshogi2/rating.py` holds the arithmetic (Elo, confidence intervals, LOS,
+SPRT, and a Bradley-Terry fit that puts every checkpoint on one scale); it is
+standard-library only. The full method, including how to read the verdict, is in
+the wiki's
+[Evaluation and Rating](https://github.com/LoveKapibarasan/python-dlshogi2/wiki/Evaluation-and-Rating).
+Proposals waiting to be measured live in
+[Improvement Backlog](https://github.com/LoveKapibarasan/python-dlshogi2/wiki/Improvement-Backlog).
+
+---
 
 ## Dashboard
 
@@ -295,6 +359,8 @@ DLSHOGI_METRICS_DIR=rl/metrics DLSHOGI_CHECKPOINT_DIR=checkpoints \
 | Runs | Every run with its start time, git commit, host/GPU, hyper-parameters, last step and final accuracy |
 | 学習曲線 | Train/test loss and policy/value accuracy for several runs overlaid on a step axis |
 | RL ループ | Per-iteration self-play statistics (games, win/draw split, mean game length) and the artifacts each iteration produced |
+| レーティング | Every match played, the Elo scale fitted across all of them, and how one match's Elo and SPRT converged game by game |
+| 改善案 | The proposals from `wiki/Improvement-Backlog.md`, each joined to the matches that measured it |
 | チェックポイント | Model files with size and mtime, plus the architecture embedded in a `.pth` |
 
 Metrics are **JSON Lines**, one file per run, flushed on every write — a run

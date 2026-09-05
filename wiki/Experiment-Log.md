@@ -67,4 +67,6 @@ later runs have something to compare against.
 ---
 
 See also: [Metrics and Dashboard](Metrics-and-Dashboard),
-[Training Pipeline](Training-Pipeline)
+[Training Pipeline](Training-Pipeline),
+[Improvement Backlog](Improvement-Backlog),
+[Evaluation and Rating](Evaluation-and-Rating)

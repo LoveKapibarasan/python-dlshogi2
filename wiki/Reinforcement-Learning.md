@@ -29,7 +29,8 @@ own most recent quirks; keeping the history is a poor man's replay buffer.
 The "test" file passed to the trainer is the newest batch, which also appears in
 training. The resulting test numbers are therefore **a sanity check, not a
 generalisation measure** — they tell you the run has not diverged, nothing more.
-Judge actual progress by playing the checkpoints against each other.
+Judge actual progress by playing the checkpoints against each other — which is
+what [Evaluation and Rating](Evaluation-and-Rating) is for.
 
 ## Resumability
 

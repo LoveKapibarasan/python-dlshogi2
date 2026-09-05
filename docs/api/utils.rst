@@ -12,3 +12,9 @@ HCPE de-duplication
 
 .. automodule:: utils.hcpe_dedup
    :members:
+
+Opening book
+------------
+
+.. automodule:: utils.make_opening_book
+   :members:

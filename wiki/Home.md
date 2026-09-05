@@ -34,6 +34,11 @@ here.
 - [Environments](Environments) — Colab, Vast.ai and local GPU setup
 - [USI Engine](USI-Engine) — registering the engine in a shogi GUI, PyTorch vs ONNX
 
+**Deciding what to change**
+
+- [Improvement Backlog](Improvement-Backlog) — proposals for making the engine stronger, ranked by value over cost
+- [Evaluation and Rating](Evaluation-and-Rating) — how a change is proved: matches, Elo, SPRT, and what 100 games can and cannot tell you
+
 **Records**
 
 - [Experiment Log](Experiment-Log) — what was trained, with what settings, and what came out
