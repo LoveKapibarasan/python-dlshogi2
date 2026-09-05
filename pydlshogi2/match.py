@@ -49,6 +49,51 @@ from pydlshogi2.metrics import MetricsWriter
 WIN, LOSS, DRAW = 'win', 'loss', 'draw'
 
 
+def count_openings(path):
+    """Return how many opening lines ``path`` holds.
+
+    :param path: opening book path, or ``None``.
+    :returns: number of lines, or ``0`` when there is no readable book.
+    """
+    if not path:
+        return 0
+    try:
+        with open(path, encoding='utf-8') as f:
+            return sum(1 for line in f if line.strip())
+    except OSError:
+        return 0
+
+
+def check_opening_supply(games, opening_path):
+    """Return a warning when the book cannot keep the games distinct.
+
+    ``cshogi.cli`` uses opening ``n // 2`` for game ``n``, so a book of *k*
+    lines covers exactly *2k* games.  Beyond that it wraps — and because the
+    search is deterministic, the games that follow are **identical replays** of
+    the ones already played.  They cost GPU time, add no information, and are
+    actively harmful: the statistics count them as fresh evidence and report a
+    confidence the match has not earned.
+
+    :param games: number of games requested.
+    :param opening_path: opening book path, or ``None``.
+    :returns: a warning string, or ``None`` when the supply is sufficient.
+    """
+    if not opening_path:
+        return ('no --opening book: MCTS is deterministic, so every game may be '
+                'a replay of the first one. Generate one with '
+                'utils/make_opening_book.py.')
+    available = count_openings(opening_path)
+    if available == 0:
+        return 'opening book {!r} is empty or unreadable'.format(opening_path)
+    if games > 2 * available:
+        return ('{} openings cover only {} games, but {} were requested; games '
+                '{}+ would be identical replays and would overstate the '
+                'confidence of the result. Generate at least {} openings.'
+                .format(available, 2 * available, games, 2 * available + 1,
+                        -(-games // 2)))
+    return None
+
+
 def parse_options(text):
     """Parse a ``name=value,name=value`` engine option string into a dict.
 
@@ -301,6 +346,10 @@ def build_parser():
                         help='maximum plies replayed from each opening line')
     parser.add_argument('--opening-seed', type=int, default=None,
                         help='seed for shuffling the opening book')
+    parser.add_argument('--allow-replays', action='store_true',
+                        help='play on even when the opening book is too small '
+                             'to keep the games distinct (the extra games are '
+                             'replays and inflate the apparent confidence)')
     parser.add_argument('--draw', type=int, default=256,
                         help='declare a draw after this many plies')
     parser.add_argument('--resign', type=int, default=None,
@@ -421,10 +470,14 @@ def main():
         print('warning: no time control given; the engines will use their own '
               'default playout count. Pass --playouts or --byoyomi to make the '
               'match reproducible.', file=sys.stderr)
-    if not args.opening:
-        print('warning: no --opening book; MCTS is deterministic, so every game '
-              'may be a replay of the first one. Generate one with '
-              'utils/make_opening_book.py.', file=sys.stderr)
+
+    warning = check_opening_supply(args.games, args.opening)
+    if warning:
+        print('warning: ' + warning, file=sys.stderr)
+        if not args.allow_replays:
+            print('refusing to play a match that would repeat itself; pass '
+                  '--allow-replays to override.', file=sys.stderr)
+            sys.exit(2)
 
     stats, sprt_result, stopped_early, (name1, name2) = run_match(args)
     print(format_summary(name1, name2, stats, sprt_result, stopped_early))
