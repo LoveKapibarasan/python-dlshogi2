@@ -412,7 +412,11 @@ def build_parser():
     record_group.add_argument('--note', default=None,
                               help='free-text note stored on the run record')
     record_group.add_argument('--csa', default=None,
-                              help='directory to write the games to as CSA')
+                              help='directory to write the games to, one CSA '
+                                   'file per game (created if missing)')
+    record_group.add_argument('--multi-csa', default=None,
+                              help='single CSA file to append every game to, '
+                                   'instead of one file per game')
     record_group.add_argument('--quiet', action='store_true',
                               help='only print the final summary')
     record_group.add_argument('--debug', action='store_true',
@@ -445,6 +449,14 @@ def run_match(args):
         sprt_config = {'elo0': args.elo0, 'elo1': args.elo1,
                        'alpha': args.alpha, 'beta': args.beta}
 
+    if args.csa:
+        # cshogi は1局1ファイルのときディレクトリが在ることを前提にしている
+        os.makedirs(args.csa, exist_ok=True)
+    if args.multi_csa:
+        directory = os.path.dirname(os.path.abspath(args.multi_csa))
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+
     metrics = MetricsWriter(
         args.metrics, kind='match', args=vars(args),
         extra={'experiment': args.experiment, 'issue': args.issue,
@@ -465,7 +477,7 @@ def run_match(args):
             opening=args.opening, opening_moves=args.opening_moves,
             opening_seed=args.opening_seed,
             keep_process=True,
-            csa=args.csa, multi_csa=bool(args.csa),
+            csa=args.multi_csa or args.csa, multi_csa=bool(args.multi_csa),
             print_summary=False, debug=args.debug,
             callback=recorder)
     except Exception:
