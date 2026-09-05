@@ -41,6 +41,7 @@ Example
 import argparse
 import os
 import sys
+import time
 
 from pydlshogi2 import rating
 from pydlshogi2.metrics import MetricsWriter
@@ -165,6 +166,11 @@ class MatchRecorder:
         self.results = []
         self.stopped_early = False
         self.sprt_result = None
+        # 1局に何秒かかっているかは、残り時間の見積もりにも、
+        # 止まった対局に気付くためにも要る
+        self.started = time.time()
+        self.last_game_at = self.started
+        self.seconds = []
 
     @property
     def stats(self):
@@ -205,10 +211,15 @@ class MatchRecorder:
         wins = status['engine1_won']
         losses = status['engine2_won']
         draws = status['draw']
+        now = time.time()
+        elapsed = now - self.last_game_at
+        self.last_game_at = now
+
         result = self._classify(wins, losses, draws)
         self.wins, self.losses, self.draws = wins, losses, draws
         if result is not None:
             self.results.append(result)
+            self.seconds.append(elapsed)
 
         stats = self.stats
         record = {
@@ -226,7 +237,12 @@ class MatchRecorder:
             'los': stats.los,
             'black_won': status['black_won'],
             'white_won': status['white_won'],
+            'seconds': elapsed,
+            'elapsed': now - self.started,
         }
+        if self.games and self.results:
+            mean = sum(self.seconds) / len(self.seconds)
+            record['eta_seconds'] = mean * (self.games - len(self.results))
         if self.paired:
             record['pairs'] = stats.pairs
             record['pentanomial'] = stats.pentanomial
@@ -251,12 +267,16 @@ class MatchRecorder:
                 line += ' llr={:+.2f} [{:.2f}, {:.2f}] {}'.format(
                     self.sprt_result.llr, self.sprt_result.lower,
                     self.sprt_result.upper, self.sprt_result.decision)
+            line += ' {:.0f}s'.format(elapsed)
+            if record.get('eta_seconds'):
+                line += ' eta {:.0f}m'.format(record['eta_seconds'] / 60.0)
             print(line, flush=True)
 
         return keep_going
 
 
-def format_summary(name_a, name_b, stats, sprt_result=None, stopped_early=False):
+def format_summary(name_a, name_b, stats, sprt_result=None, stopped_early=False,
+                   seconds=None):
     """Render the end-of-match report as a block of text.
 
     :param name_a: name of the first engine.
@@ -264,6 +284,7 @@ def format_summary(name_a, name_b, stats, sprt_result=None, stopped_early=False)
     :param stats: final :class:`~pydlshogi2.rating.MatchStats`.
     :param sprt_result: the last :class:`~pydlshogi2.rating.SprtResult`, if any.
     :param stopped_early: whether the sequential test ended the match.
+    :param seconds: per-game durations, for the timing line.
     :returns: a multi-line string.
     """
     low, high = stats.elo_interval(0.95)
@@ -283,6 +304,9 @@ def format_summary(name_a, name_b, stats, sprt_result=None, stopped_early=False)
             stats.elo, stats.error_margin, low, high),
         'LOS        : {:.1f}%'.format(stats.los),
     ]
+    if seconds:
+        lines.append('time       : {:.0f} min total, {:.0f} s per game'.format(
+            sum(seconds) / 60.0, sum(seconds) / len(seconds)))
     if sprt_result is not None:
         lines.append('SPRT       : llr={:+.3f} bounds=[{:.3f}, {:.3f}] '
                      'H0={:.0f} H1={:.0f} -> {}'.format(
@@ -400,7 +424,7 @@ def run_match(args):
     """Play the match described by ``args`` and return its statistics.
 
     :param args: parsed arguments from :func:`build_parser`.
-    :returns: a ``(stats, sprt_result, stopped_early, names)`` tuple.
+    :returns: a ``(stats, sprt_result, stopped_early, names, seconds)`` tuple.
     """
     # cshogi は対局と USI プロトコルを既に持っているので、そこは再実装しない
     from cshogi import cli
@@ -450,7 +474,10 @@ def run_match(args):
 
     stats = recorder.stats
     summary = {'scope': 'summary', 'player_a': name1, 'player_b': name2,
-               'stopped_early': recorder.stopped_early}
+               'stopped_early': recorder.stopped_early,
+               'elapsed': time.time() - recorder.started,
+               'mean_seconds_per_game': (sum(recorder.seconds) / len(recorder.seconds)
+                                         if recorder.seconds else 0.0)}
     summary.update(stats.summary())
     if recorder.sprt_result is not None:
         summary['sprt'] = recorder.sprt_result.summary()
@@ -459,7 +486,8 @@ def run_match(args):
     metrics.metric(**summary)
     metrics.close(status='completed', games=stats.games)
 
-    return stats, recorder.sprt_result, recorder.stopped_early, (name1, name2)
+    return (stats, recorder.sprt_result, recorder.stopped_early,
+            (name1, name2), recorder.seconds)
 
 
 def main():
@@ -479,8 +507,8 @@ def main():
                   '--allow-replays to override.', file=sys.stderr)
             sys.exit(2)
 
-    stats, sprt_result, stopped_early, (name1, name2) = run_match(args)
-    print(format_summary(name1, name2, stats, sprt_result, stopped_early))
+    stats, sprt_result, stopped_early, (name1, name2), seconds = run_match(args)
+    print(format_summary(name1, name2, stats, sprt_result, stopped_early, seconds))
 
     # SPRT で「改善なし」と判定された場合のみ非ゼロ終了 (CIやスクリプトから使える)
     if sprt_result is not None and sprt_result.decision == 'reject':

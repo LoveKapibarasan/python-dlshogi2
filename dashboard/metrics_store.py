@@ -298,7 +298,8 @@ def match_summaries(records):
             continue
         # summary がない (実行中/中断) 場合は最新の1局記録で代用する
         for key in ('wins', 'losses', 'draws', 'score', 'elo', 'error_margin',
-                    'los', 'llr', 'sprt_decision', 'pairs', 'pentanomial'):
+                    'los', 'llr', 'sprt_decision', 'pairs', 'pentanomial',
+                    'elapsed', 'eta_seconds'):
             if metric.get(key) is not None:
                 row[key] = metric[key]
         row['games'] = (row.get('wins') or 0) + (row.get('losses') or 0) + (row.get('draws') or 0)
