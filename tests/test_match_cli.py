@@ -212,6 +212,18 @@ class ParserTest(unittest.TestCase):
         self.assertFalse(args.sprt)
         self.assertFalse(args.unpaired)
 
+    def test_csa_and_multi_csa_are_distinct(self):
+        # --csa はディレクトリ(1局1ファイル)、--multi-csa は追記する1ファイル。
+        # cshogi はこの2つを1つの引数で切り替えるので、取り違えると起動時に落ちる
+        args = match.build_parser().parse_args(
+            ['--engine1', 'a.sh', '--engine2', 'b.sh', '--csa', 'games'])
+        self.assertEqual(args.csa, 'games')
+        self.assertIsNone(args.multi_csa)
+        args = match.build_parser().parse_args(
+            ['--engine1', 'a.sh', '--engine2', 'b.sh', '--multi-csa', 'all.csa'])
+        self.assertIsNone(args.csa)
+        self.assertEqual(args.multi_csa, 'all.csa')
+
     def test_sprt_defaults_match_the_rating_module(self):
         args = match.build_parser().parse_args(
             ['--engine1', 'a.sh', '--engine2', 'b.sh', '--sprt'])
