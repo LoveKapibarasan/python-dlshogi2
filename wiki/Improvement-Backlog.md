@@ -29,7 +29,7 @@ run and how to read its verdict.
 | EXP-003 | `rl_loop.sh` に昇格ゲートを入れる (前チェックポイントに勝てなければ昇格しない) | pipeline | 退行の防止 | 小 | 未着手 | [#7](https://github.com/LoveKapibarasan/python-dlshogi2/issues/7) |
 | EXP-004 | 探索パラメータ (`c_puct` / `fpu_reduction` / `temperature`) の総当たり調整 | tuning | +0〜80 | 中 (GPU時間) | 未着手 | [#8](https://github.com/LoveKapibarasan/python-dlshogi2/issues/8) |
 | EXP-005 | `batchsize` と virtual loss の見直し | tuning | +0〜30 | 小 | 未着手 | [#9](https://github.com/LoveKapibarasan/python-dlshogi2/issues/9) |
-| EXP-006 | 局面評価の呼び出し経路を JIT 化する (numba / Cython) | search | +60〜120 | 中 | 未着手 | [#10](https://github.com/LoveKapibarasan/python-dlshogi2/issues/10) |
+| EXP-006 | 局面評価の呼び出し経路を JIT 化する (numba / Cython) | search | +20〜60 (EXP-001 後の実測で下方修正) | 中 | 未着手 | [#10](https://github.com/LoveKapibarasan/python-dlshogi2/issues/10) |
 | EXP-007 | 特徴量生成と `make_move_label` のベクトル化 | search | +5〜15 | 小 | 未着手 | [#11](https://github.com/LoveKapibarasan/python-dlshogi2/issues/11) |
 | EXP-008 | 詰み探索の深さをルート以外にも広げる | search | +10〜40 | 中 | 未着手 | [#12](https://github.com/LoveKapibarasan/python-dlshogi2/issues/12) |
 | EXP-009 | ネットワークの再学習 (20×256 SE, Floodgate 全体) | training | +200 以上 | 大 (GPU が足りない) | 保留 | [#13](https://github.com/LoveKapibarasan/python-dlshogi2/issues/13) |
@@ -43,27 +43,43 @@ run and how to read its verdict.
 
 ### 探索は GPU ではなく Python で詰まっている
 
-`checkpoints/checkpoint.pth` (10×192) で 1,500 playout をプロファイルした結果:
+`checkpoints/checkpoint.pth` (10×192) で 1,500 playout を計測した内訳
+(`eval_node` の前後で `time.process_time()` を読む):
 
-| 内訳 | 秒 | 割合 |
-|------|----|------|
-| `select_max_ucb_child` | 7.02 | 50 % |
-| ニューラルネット順伝播 (conv2d + batch_norm + relu) | 1.9 | 13 % |
-| `uct_search` 本体 | 1.34 | 10 % |
-| `update_result` | 0.49 | 3 % |
-| `make_move_label` | 0.65 | 5 % |
-| その他 | 2.6 | 19 % |
+| 内訳 | 割合 |
+|------|------|
+| 木の操作 (選択・展開・バックアップ) | **79 %** |
+| ニューラルネット評価 (`eval_node`) | 21 % (うち順伝播 15 %) |
 
-`nvidia-smi` が示すとおり GPU 使用率はほぼ 0 % で、実測は **約 450 playout/s**。
+`nvidia-smi` の GPU 使用率はほぼ 0 % で、実測は数百 playout/s。
 つまりこのエンジンは GPU ではなく **CPU 上の Python でボトルネックになっている**。
-ONNX 化や TensorRT、より大きな `batchsize` は 13 % の部分しか速くできないので、
-効果はどれも 15 % 未満で頭打ちになる。EXP-001 と EXP-006 が上位にいるのはこの
-ためで、探索が速くなれば同じ持ち時間でより深く読める＝そのまま棋力になる。
+ONNX 化や TensorRT、より大きな `batchsize` は 21 % の部分にしか効かない。
+EXP-001 と EXP-006 が上位にいるのはこのためで、探索が速くなれば同じ持ち時間で
+より深く読める＝そのまま棋力になる。
 
-`select_max_ucb_child` は 1 回あたり約 200 マイクロ秒かかっている。中身は 40 要素
-程度の小さな配列に対する numpy 演算が 12 回で、**計算そのものではなく numpy の
-呼び出しオーバーヘッドが支配的**。呼び出し回数を減らし、訪問済み方策和のように
-差分更新できる量を毎回計算し直すのをやめれば、挙動を変えずに縮められる。
+木の操作の中では `select_max_ucb_child` が突出していた。`timeit` で直接計った
+1 回あたりの時間は **約 145 マイクロ秒**で、しかも**合法手が 12 手でも 120 手でも
+ほぼ変わらない**。計算量ではなく、40 要素程度の配列に対する numpy 呼び出しの
+オーバーヘッドが支配的だったということ。EXP-001 はここを叩いた。
+
+> **計測の落とし穴 (踏んだので記録)。** cProfile は自身のオーバーヘッドを
+> 呼ばれた側に計上するので、34,000 回呼ばれる関数の秒数は大きく膨らむ。
+> また作業台は ollama と CPU を共有していて、同じ探索が 6.5 秒から 11.9 秒まで
+> 振れる。倍率を語るときは `timeit` か `time.process_time()` を使い、
+> A/B は**交互に走らせて最小値で比べる**こと。詳細は [MCTS](MCTS) を参照。
+
+### EXP-001 実施後の内訳
+
+EXP-001 を入れると比率が変わり、次にどこを叩くべきかも変わる:
+
+| 内訳 | 最適化前 | 最適化後 |
+|------|---------|---------|
+| 木の操作 | 79 % | 57〜62 % |
+| ニューラルネット評価 | 21 % | 38〜43 % |
+
+木の操作が支配的ではなくなるので、**EXP-006 (JIT 化) の上積みは当初の見積もりより
+小さい**。逆にニューラルネット側 (EXP-005 の batchsize、推論バックエンド) の
+相対的な価値は上がる。見積もりは実測が出るたびに直す。
 
 ### モデルの再学習 (EXP-009) を保留にしている理由
 
