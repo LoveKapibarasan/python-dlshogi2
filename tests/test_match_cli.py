@@ -148,6 +148,24 @@ class MatchRecorderTest(unittest.TestCase):
         # 200局まで行かずに打ち切れていること
         self.assertLess(len(recorder.results), 200)
 
+    def test_records_how_long_each_game_took(self):
+        recorder = match.MatchRecorder(self.NullMetrics(), games=4, quiet=True)
+        recorder(self.status(1, 0, 0))
+        recorder(self.status(1, 1, 0))
+        self.assertEqual(len(recorder.seconds), 2)
+        for seconds in recorder.seconds:
+            self.assertGreaterEqual(seconds, 0.0)
+
+    def test_estimates_the_remaining_time(self):
+        metrics = self.NullMetrics()
+        recorder = match.MatchRecorder(metrics, games=10, quiet=True)
+        recorder(self.status(1, 0, 0))
+        record = metrics.records[-1]
+        self.assertIn('seconds', record)
+        # 10局中1局終わったので、残り9局分の見積もりが出る
+        self.assertAlmostEqual(record['eta_seconds'], record['seconds'] * 9,
+                               delta=record['seconds'] * 9 + 1e-6)
+
     def test_no_sprt_means_no_early_stop(self):
         recorder = match.MatchRecorder(self.NullMetrics(), games=4, quiet=True)
         self.assertTrue(recorder(self.status(1, 0, 0)))
@@ -171,6 +189,12 @@ class FormatSummaryTest(unittest.TestCase):
         text = match.format_summary('branch', 'main', stats)
         self.assertIn('pairs', text)
         self.assertIn('[0, 0, 0, 10, 0]', text)
+
+    def test_timing_line_appears_when_durations_are_known(self):
+        text = match.format_summary('branch', 'main', rating.MatchStats(5, 5),
+                                    seconds=[30.0, 40.0, 50.0])
+        self.assertIn('time', text)
+        self.assertIn('40 s per game', text)
 
     def test_sprt_verdict_is_spelled_out(self):
         stats = rating.PairedMatchStats(['win', 'draw'] * 20)

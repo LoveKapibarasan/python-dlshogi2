@@ -252,7 +252,8 @@ def render_rl_tab(records):
 MATCH_COLUMNS = [
     'started_at', 'experiment', 'issue', 'player_a', 'player_b', 'games',
     'wins', 'losses', 'draws', 'score', 'elo', 'error_margin', 'los',
-    'sprt_decision', 'llr', 'byoyomi', 'playouts', 'status', 'git_commit',
+    'sprt_decision', 'llr', 'byoyomi', 'playouts', 'mean_seconds_per_game',
+    'elapsed', 'status', 'git_commit',
 ]
 
 #: How a verdict is shown next to a proposal.
