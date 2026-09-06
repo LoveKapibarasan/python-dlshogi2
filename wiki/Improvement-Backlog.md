@@ -24,7 +24,7 @@ run and how to read its verdict.
 
 | ID | 改善案 | 種別 | 期待 Elo | コスト | 状態 | Issue |
 |----|--------|------|----------|--------|------|-------|
-| EXP-001 | `select_max_ucb_child` の numpy 呼び出し削減と訪問済み方策和の差分更新 | search | +30〜60 (固定時間) | 小 | 計測中 | [#5](https://github.com/LoveKapibarasan/python-dlshogi2/issues/5) |
+| EXP-001 | `select_max_ucb_child` の numpy 呼び出し削減と訪問済み方策和の差分更新 | search | +30〜60 → **実測 +123 ± 62** | 小 | **採用** | [#5](https://github.com/LoveKapibarasan/python-dlshogi2/issues/5) |
 | EXP-002 | MCTS solver: 証明済みの勝ち/負けを親へ厳密に伝播する | search | +20〜60 | 中 | 未着手 | [#6](https://github.com/LoveKapibarasan/python-dlshogi2/issues/6) |
 | EXP-003 | `rl_loop.sh` に昇格ゲートを入れる (前チェックポイントに勝てなければ昇格しない) | pipeline | 退行の防止 | 小 | 未着手 | [#7](https://github.com/LoveKapibarasan/python-dlshogi2/issues/7) |
 | EXP-004 | 探索パラメータ (`c_puct` / `fpu_reduction` / `temperature`) の総当たり調整 | tuning | +0〜80 | 中 (GPU時間) | 未着手 | [#8](https://github.com/LoveKapibarasan/python-dlshogi2/issues/8) |
