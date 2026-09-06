@@ -87,8 +87,9 @@ class SelfPlayEngine(MCTSPlayer):
         if self.noise_eps <= 0.0:
             return
         noise = np.random.dirichlet([self.dirichlet_alpha] * len(node.policy))
-        node.policy = ((1.0 - self.noise_eps) * node.policy
-                       + self.noise_eps * noise).astype(np.float32)
+        # 方策を差し替えるので、選択が読むキャッシュも作り直す
+        node.set_policy(((1.0 - self.noise_eps) * node.policy
+                         + self.noise_eps * noise).astype(np.float32))
 
     def think(self, playouts):
         """Run a fixed-playout search at the current root and add root noise.
