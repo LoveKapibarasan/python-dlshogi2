@@ -13,6 +13,10 @@
 - [Environments](Environments)
 - [USI Engine](USI-Engine)
 
+**Evaluation**
+- [Evaluation and Rating](Evaluation-and-Rating)
+- [Improvement Backlog](Improvement-Backlog)
+
 **Records**
 - [Experiment Log](Experiment-Log)
 - [Troubleshooting](Troubleshooting)

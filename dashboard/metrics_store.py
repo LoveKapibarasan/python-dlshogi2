@@ -19,9 +19,21 @@ See :mod:`pydlshogi2.metrics` for the record schema.
 import glob
 import json
 import os
+import re
+import sys
+
+# リポジトリルートを通して pydlshogi2.rating を使う (標準ライブラリのみのモジュール)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from pydlshogi2 import rating as rating_math  # noqa: E402
 
 #: Record types understood by :func:`load_records`.
 RECORD_TYPES = ('run', 'metric', 'event')
+
+#: Default location of the improvement backlog, relative to the repository root.
+BACKLOG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    'wiki', 'Improvement-Backlog.md')
 
 
 def find_metric_files(directory):
@@ -221,6 +233,201 @@ def rl_iterations(records):
     _, metrics, _ = split_records(records)
     rows = [m for m in metrics if m.get('scope') == 'iteration']
     return sorted(rows, key=lambda r: r.get('iteration') or 0)
+
+
+def match_summaries(records):
+    """Build one row per engine-versus-engine match.
+
+    A match writes a ``run`` record (who played whom, which experiment it
+    belongs to) and, when it finishes, a ``scope='summary'`` metric with the
+    final counts.  A match still in progress — or one killed part-way — has no
+    summary, so the newest per-game record stands in and the row is marked
+    ``running``.  Nothing is dropped: a match interrupted after 60 of 100 games
+    is still evidence.
+
+    :param records: records from :func:`load_records`.
+    :returns: list of match dicts, newest first.
+    """
+    runs, metrics, events = split_records(records)
+
+    matches = {}
+    for run in runs:
+        if run.get('kind') != 'match':
+            continue
+        run_id = run.get('run_id') or run.get('source_file')
+        args = run.get('args') or {}
+        matches[run_id] = {
+            'run_id': run_id,
+            'started_at': run.get('started_at'),
+            'timestamp': run.get('timestamp'),
+            'git_commit': (run.get('git_commit') or '')[:8],
+            'git_dirty': run.get('git_dirty'),
+            'hostname': run.get('hostname'),
+            'experiment': run.get('experiment'),
+            'issue': run.get('issue'),
+            'note': run.get('note'),
+            'player_a': run.get('player_a'),
+            'player_b': run.get('player_b'),
+            'byoyomi': args.get('byoyomi'),
+            'playouts': args.get('playouts'),
+            'opening': args.get('opening'),
+            'source_file': run.get('source_file'),
+            'status': 'running',
+            'wins': 0, 'losses': 0, 'draws': 0, 'games': 0,
+        }
+
+    def slot(record):
+        run_id = record.get('run_id') or record.get('source_file')
+        return matches.get(run_id)
+
+    latest_game = {}
+    for metric in metrics:
+        row = slot(metric)
+        if row is None:
+            continue
+        if metric.get('scope') == 'summary':
+            row.update({key: metric[key] for key in metric
+                        if key not in ('type', 'run_id', 'timestamp', 'scope',
+                                       'source_file')})
+        elif metric.get('scope') == 'game':
+            latest_game[metric.get('run_id')] = metric
+
+    for run_id, metric in latest_game.items():
+        row = matches.get(run_id)
+        if row is None or row.get('games'):
+            continue
+        # summary がない (実行中/中断) 場合は最新の1局記録で代用する
+        for key in ('wins', 'losses', 'draws', 'score', 'elo', 'error_margin',
+                    'los', 'llr', 'sprt_decision', 'pairs', 'pentanomial',
+                    'elapsed', 'eta_seconds'):
+            if metric.get(key) is not None:
+                row[key] = metric[key]
+        row['games'] = (row.get('wins') or 0) + (row.get('losses') or 0) + (row.get('draws') or 0)
+
+    for event in events:
+        row = slot(event)
+        if row is not None and event.get('event') == 'run_end':
+            row['status'] = event.get('status', 'completed')
+            row['ended_at'] = event.get('timestamp')
+
+    return sorted(matches.values(),
+                  key=lambda r: r.get('timestamp') or 0, reverse=True)
+
+
+def rating_table(matches, anchor=None):
+    """Fit one Elo rating per engine across every recorded match.
+
+    Individual matches only give differences between two engines.  Fitting them
+    all at once puts every checkpoint and every branch on a single scale, which
+    is what makes "is this better than what we had three iterations ago?"
+    answerable without replaying those games.
+
+    :param matches: rows from :func:`match_summaries`.
+    :param anchor: engine pinned to 0 Elo (default: the most-played one).
+    :returns: list of rating rows, strongest first.
+    """
+    usable = [m for m in matches
+              if m.get('player_a') and m.get('player_b') and m.get('games')]
+    return rating_math.bradley_terry_ratings(usable, anchor=anchor)
+
+
+def _split_table_row(line):
+    """Split one Markdown table row into stripped cell strings."""
+    return [cell.strip() for cell in line.strip().strip('|').split('|')]
+
+
+def load_backlog(path=None):
+    """Parse the improvement backlog table out of its wiki page.
+
+    The backlog lives in ``wiki/Improvement-Backlog.md`` so that a proposal is
+    reviewed in a pull request like everything else, and so the page stays
+    readable on GitHub without this dashboard.  Reading it here — rather than
+    keeping a second copy in a database — is what keeps the two from drifting.
+
+    The first Markdown table with an ``ID`` column is used; its header cells
+    become the keys of each row.
+
+    :param path: path to the backlog page (default: :data:`BACKLOG_PATH`).
+    :returns: list of row dicts, or ``[]`` when the page or table is missing.
+    """
+    path = path or BACKLOG_PATH
+    try:
+        with open(path, encoding='utf-8') as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return []
+
+    header = None
+    rows = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith('|'):
+            if header is not None:
+                break  # 表が終わった
+            continue
+        cells = _split_table_row(stripped)
+        if header is None:
+            if not any(cell.lower() == 'id' for cell in cells):
+                continue
+            header = cells
+            continue
+        if all(re.fullmatch(r':?-{2,}:?', cell or '') for cell in cells):
+            continue  # 区切り行
+        row = dict(zip(header, cells))
+        if row.get('ID'):
+            rows.append(row)
+    return rows
+
+
+def backlog_with_results(records, path=None):
+    """Join the backlog proposals with the matches that measured them.
+
+    :param records: records from :func:`load_records`.
+    :param path: path to the backlog page.
+    :returns: list of backlog rows, each with a ``matches`` list attached and
+        the measured Elo of its most recent match.
+    """
+    matches = match_summaries(records)
+    by_experiment = {}
+    for match in matches:
+        experiment = match.get('experiment')
+        if experiment:
+            by_experiment.setdefault(experiment, []).append(match)
+
+    rows = []
+    for row in load_backlog(path):
+        row = dict(row)
+        experiment = row.get('ID')
+        measured = by_experiment.get(experiment, [])
+        row['matches'] = measured
+        row['match_count'] = len(measured)
+        if measured:
+            newest = measured[0]
+            row['measured_elo'] = newest.get('elo')
+            row['error_margin'] = newest.get('error_margin')
+            row['los'] = newest.get('los')
+            row['games'] = newest.get('games')
+            row['sprt_decision'] = newest.get('sprt_decision')
+        rows.append(row)
+
+    # backlog に載っていない実験も取りこぼさない
+    known = {row.get('ID') for row in rows}
+    for experiment, measured in sorted(by_experiment.items()):
+        if experiment in known:
+            continue
+        newest = measured[0]
+        rows.append({
+            'ID': experiment,
+            '改善案': '(backlog に記載なし)',
+            'matches': measured,
+            'match_count': len(measured),
+            'measured_elo': newest.get('elo'),
+            'error_margin': newest.get('error_margin'),
+            'los': newest.get('los'),
+            'games': newest.get('games'),
+            'sprt_decision': newest.get('sprt_decision'),
+        })
+    return rows
 
 
 def list_checkpoints(directory):

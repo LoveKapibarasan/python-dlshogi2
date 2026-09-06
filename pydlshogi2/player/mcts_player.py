@@ -139,6 +139,8 @@ class MCTSPlayer(BasePlayer):
         self.pv_interval = DEFAULT_PV_INTERVAL
         # ルート詰み探索手数
         self.mate_root_ply = DEFAULT_MATE_ROOT_PLY
+        # 時間指定なしの go で使う固定プレイアウト数
+        self.const_playout = DEFAULT_CONST_PLAYOUT
 
         self.debug = False
 
@@ -157,6 +159,7 @@ class MCTSPlayer(BasePlayer):
         print('option name byoyomi_margin type spin default ' + str(DEFAULT_BYOYOMI_MARGIN) + ' min 0 max 1000')
         print('option name pv_interval type spin default ' + str(DEFAULT_PV_INTERVAL) + ' min 0 max 10000')
         print('option name mate_root_ply type spin default ' + str(DEFAULT_MATE_ROOT_PLY) + ' min 1 max 31')
+        print('option name playouts type spin default ' + str(DEFAULT_CONST_PLAYOUT) + ' min 1 max 10000000')
         print('option name debug type check default false')
 
     def setoption(self, args):
@@ -184,6 +187,8 @@ class MCTSPlayer(BasePlayer):
             self.pv_interval = int(args[3])
         elif args[1] == 'mate_root_ply':
             self.mate_root_ply = int(args[3])
+        elif args[1] == 'playouts':
+            self.const_playout = int(args[3])
         elif args[1] == 'debug':
             self.debug = args[3] == 'true'
 
@@ -252,8 +257,9 @@ class MCTSPlayer(BasePlayer):
         else:
             self.remaining_time, inc = (btime, binc) if self.root_board.turn == BLACK else (wtime, winc)
             if self.remaining_time is None and byoyomi is None and inc is None:
-                # 時間指定がない場合
-                self.halt = DEFAULT_CONST_PLAYOUT
+                # 時間指定がない場合は固定プレイアウト数で探索する
+                # (playouts オプションで変更でき、対局harnessの固定探索量条件に使う)
+                self.halt = self.const_playout
             else:
                 self.minimum_time = 0
                 self.remaining_time = int(self.remaining_time) if self.remaining_time else 0

@@ -28,6 +28,7 @@ from the in-source docstrings.
    api/selfplay
    api/players
    api/uct
+   api/evaluation
    api/metrics
    api/utils
 
