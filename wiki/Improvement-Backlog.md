@@ -27,7 +27,7 @@ run and how to read its verdict.
 | EXP-001 | `select_max_ucb_child` の numpy 呼び出し削減と訪問済み方策和の差分更新 | search | +30〜60 → **実測 +123 ± 62** | 小 | **採用** | [#5](https://github.com/LoveKapibarasan/python-dlshogi2/issues/5) |
 | EXP-002 | MCTS solver: 証明済みの勝ち/負けを親へ厳密に伝播する | search | +20〜60 | 中 | 未着手 | [#6](https://github.com/LoveKapibarasan/python-dlshogi2/issues/6) |
 | EXP-003 | `rl_loop.sh` に昇格ゲートを入れる (前チェックポイントに勝てなければ昇格しない) | pipeline | 退行の防止 | 小 | 未着手 | [#7](https://github.com/LoveKapibarasan/python-dlshogi2/issues/7) |
-| EXP-004 | 探索パラメータ (`c_puct` / `fpu_reduction` / `temperature`) の総当たり調整 | tuning | +0〜80 | 中 (GPU時間) | 未着手 | [#8](https://github.com/LoveKapibarasan/python-dlshogi2/issues/8) |
+| EXP-004 | 探索パラメータ (`c_puct` / `fpu_reduction` / `temperature`) の総当たり調整 | tuning | +0〜80 → **実測 c_puct は空振り** | 中 (GPU時間) | **棄却** | [#8](https://github.com/LoveKapibarasan/python-dlshogi2/issues/8) |
 | EXP-005 | `batchsize` と virtual loss の見直し | tuning | +0〜30 | 小 | 未着手 | [#9](https://github.com/LoveKapibarasan/python-dlshogi2/issues/9) |
 | EXP-006 | 局面評価の呼び出し経路を JIT 化する (numba / Cython) | search | +20〜60 (EXP-001 後の実測で下方修正) | 中 | 未着手 | [#10](https://github.com/LoveKapibarasan/python-dlshogi2/issues/10) |
 | EXP-007 | 特徴量生成と `make_move_label` のベクトル化 | search | +5〜15 | 小 | 未着手 | [#11](https://github.com/LoveKapibarasan/python-dlshogi2/issues/11) |
@@ -97,6 +97,9 @@ RTX 3050 (空き 300〜800 MB) では現実的でない。Colab か Vast.ai を�
 - **コストは GPU 時間で見積もる。** 実装が 30 分でも計測に 6 時間かかるなら「中」。
 - **棄却も残す。** 効かなかった案は、次に同じ思いつきをした人への一番の情報。
   行は消さず、状態を「棄却」にして [Experiment Log](Experiment-Log) に結論を書く。
+- **狙う効果量を先に決める。** この作業台の分解能は **100 局で ±60 Elo**。
+  それより小さい差を狙う実験は、何局回しても結論が出ないので設計として成立しない
+  (EXP-004 で実証済み)。詳細は [Evaluation and Rating](Evaluation-and-Rating)。
 
 ---
 
