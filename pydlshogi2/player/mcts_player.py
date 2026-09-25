@@ -44,6 +44,8 @@ DEFAULT_PV_INTERVAL = 500
 DEFAULT_CONST_PLAYOUT = 1000
 # デフォルトのルート詰み探索手数(奇数, 探索開始時に1回だけ実行)
 DEFAULT_MATE_ROOT_PLY = 7
+# デフォルトの木の中の詰み探索手数(奇数, ノード展開のたびに実行)
+DEFAULT_MATE_TREE_PLY = 3
 # 勝ちを表す定数（数値に意味はない）
 VALUE_WIN = 10000
 # 負けを表す定数（数値に意味はない）
@@ -141,6 +143,8 @@ class MCTSPlayer(BasePlayer):
         self.pv_interval = DEFAULT_PV_INTERVAL
         # ルート詰み探索手数
         self.mate_root_ply = DEFAULT_MATE_ROOT_PLY
+        # 木の中の詰み探索手数
+        self.mate_tree_ply = DEFAULT_MATE_TREE_PLY
         # 時間指定なしの go で使う固定プレイアウト数
         self.const_playout = DEFAULT_CONST_PLAYOUT
 
@@ -161,6 +165,7 @@ class MCTSPlayer(BasePlayer):
         print('option name byoyomi_margin type spin default ' + str(DEFAULT_BYOYOMI_MARGIN) + ' min 0 max 1000')
         print('option name pv_interval type spin default ' + str(DEFAULT_PV_INTERVAL) + ' min 0 max 10000')
         print('option name mate_root_ply type spin default ' + str(DEFAULT_MATE_ROOT_PLY) + ' min 1 max 31')
+        print('option name mate_tree_ply type spin default ' + str(DEFAULT_MATE_TREE_PLY) + ' min 3 max 31')
         print('option name playouts type spin default ' + str(DEFAULT_CONST_PLAYOUT) + ' min 1 max 10000000')
         print('option name debug type check default false')
 
@@ -189,6 +194,9 @@ class MCTSPlayer(BasePlayer):
             self.pv_interval = int(args[3])
         elif args[1] == 'mate_root_ply':
             self.mate_root_ply = int(args[3])
+        elif args[1] == 'mate_tree_ply':
+            # mate_move は3手以上の奇数しか受け付けない
+            self.mate_tree_ply = max(3, int(args[3]) | 1)
         elif args[1] == 'playouts':
             self.const_playout = int(args[3])
         elif args[1] == 'debug':
@@ -480,8 +488,8 @@ class MCTSPlayer(BasePlayer):
                     child_node.value = VALUE_LOSE
                     result = 1.0
             else:
-                # 入玉宣言と3手詰めチェック
-                if board.is_nyugyoku() or board.mate_move(3):
+                # 入玉宣言と詰みチェック (mate_tree_ply 手詰め、既定は3手)
+                if board.is_nyugyoku() or board.mate_move(self.mate_tree_ply):
                     child_node.value = VALUE_WIN
                     result = 0.0
                 else:
