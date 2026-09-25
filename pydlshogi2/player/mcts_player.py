@@ -81,6 +81,43 @@ def update_result(current_node, next_index, result):
     # 訪問回数と価値が変わったので、選択が読むキャッシュを更新する
     current_node.refresh_child(next_index)
 
+# 証明済みの勝敗を親へ伝播する (MCTS solver)
+def propagate_proof(current_node, next_index):
+    """Prove ``current_node`` from its children's proven results, if possible.
+
+    A node's ``value`` of ``VALUE_WIN`` / ``VALUE_LOSE`` means the side to move
+    there wins / loses by force, and :meth:`MCTSPlayer.uct_search` already
+    treats such a node as terminal.  Until now only the leaves ever got those
+    values (mate in 3, no legal moves, repetition), and the ancestors merely
+    *averaged* them in.  This lifts the proof one level:
+
+    * one child that is lost for the opponent makes the node won;
+    * the node is lost only when **every** child has been created and is won
+      for the opponent.
+
+    Draws are not propagated: a node where the best proven result is a draw
+    still has unproven children that might do better.
+
+    Called after every backup that went through ``next_index``, so a proof
+    found deep in the tree climbs one level per playout that reaches it — and
+    because a proven node is never descended into again, it climbs on the very
+    next visit.
+
+    :param current_node: the parent whose ``next_index`` child was just backed up.
+    :param next_index: index of that child.
+    """
+    value = current_node.value
+    if value == VALUE_WIN or value == VALUE_LOSE:
+        return
+    child_value = current_node.child_node[next_index].value
+    if child_value == VALUE_LOSE:
+        current_node.value = VALUE_WIN
+    elif child_value == VALUE_WIN:
+        for child in current_node.child_node:
+            if child is None or child.value != VALUE_WIN:
+                return
+        current_node.value = VALUE_LOSE
+
 # 評価待ちキューの要素
 class EvalQueueElement:
     def set(self, node, color):
@@ -519,6 +556,8 @@ class MCTSPlayer(BasePlayer):
 
         # 探索結果の反映
         update_result(current_node, next_index, result)
+        # 子の勝敗が証明されていれば親へ伝播する
+        propagate_proof(current_node, next_index)
 
         return 1.0 - result
 
@@ -575,12 +614,15 @@ class MCTSPlayer(BasePlayer):
         # 探索にかかった時間を求める
         finish_time = time.time() - self.begin_time
 
-        # 訪問回数最大の手を選択する
+        # 訪問回数最大の手を選択する (証明済みの勝敗があればそちらを優先する)
         current_node = self.tree.current_head
-        selected_index = np.argmax(current_node.child_move_count)
+        selected_index, proven = self.select_root_move(current_node)
 
         # 選択した着手の勝率の算出
-        bestvalue = current_node.child_sum_value[selected_index] / current_node.child_move_count[selected_index]
+        if proven is not None:
+            bestvalue = proven
+        else:
+            bestvalue = current_node.child_sum_value[selected_index] / current_node.child_move_count[selected_index]
 
         bestmove = current_node.child_move[selected_index]
 
@@ -613,8 +655,51 @@ class MCTSPlayer(BasePlayer):
 
         return bestmove, bestvalue, ponder_move
 
+    # ルートの着手を選ぶ
+    def select_root_move(self, node):
+        """Pick the root move: proven results first, visit count otherwise.
+
+        * A child proven lost for the opponent is a forced win — play it, the
+          most visited one if there are several.
+        * A child proven won for the opponent is never played, however many
+          visits it collected before the proof — unless every move is lost.
+
+        :returns: ``(index, proven_value)`` where ``proven_value`` is ``1.0``
+            for a forced win, ``0.0`` when every move is proven lost, and
+            ``None`` when the choice was made on visit counts.
+        """
+        counts = node.child_move_count
+        children = node.child_node
+        if not children:
+            return np.argmax(counts), None
+
+        win_index = None
+        lost = []
+        for i, child in enumerate(children):
+            if child is None:
+                continue
+            if child.value == VALUE_LOSE:
+                if win_index is None or counts[i] > counts[win_index]:
+                    win_index = i
+            elif child.value == VALUE_WIN:
+                lost.append(i)
+        if win_index is not None:
+            return win_index, 1.0
+        if not lost:
+            return np.argmax(counts), None
+        if len(lost) == len(counts):
+            return np.argmax(counts), 0.0
+        masked = counts.astype(np.int64)
+        masked[lost] = -1
+        return np.argmax(masked), None
+
     # 探索を打ち切るか確認
     def check_interruption(self):
+        # ルートの勝敗が証明済みなら、これ以上読む意味はない
+        root_value = self.tree.current_head.value
+        if root_value == VALUE_WIN or root_value == VALUE_LOSE:
+            return True
+
         # プレイアウト数数が閾値を超えている
         if self.halt is not None:
             return self.playout_count >= self.halt
