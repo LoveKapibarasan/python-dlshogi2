@@ -9,7 +9,8 @@ stronger and more consistent teacher than the average Floodgate game.
 
 Each game starts with a few uniformly random moves so that games differ, then
 the engine plays both sides with ``go nodes N``.  Every searched position is
-recorded with the engine's best move and its score (from the side to move);
+recorded with the engine's best move and its score (stored from black's point of view,
+like every other hcpe producer here);
 once the game ends, every record gets the result.  Games are adjudicated when
 the score passes ``--adjudicate`` so the engine does not spend time proving a
 won position.
@@ -144,7 +145,9 @@ def play_game(engine, rng, args):
         if score is not None:
             hcp = np.empty(1, dtype=HuffmanCodedPosAndEval)
             board.to_hcp(hcp['hcp'])
-            records.append((hcp['hcp'][0].copy(), max(-32000, min(32000, score)),
+            # hcpe の eval は先手視点 (csa_to_hcpe・selfplay と同じ規約)
+            score_black = score if board.turn == BLACK else -score
+            records.append((hcp['hcp'][0].copy(), max(-32000, min(32000, score_black)),
                             move16(move), board.turn))
             if abs(score) >= args.adjudicate:
                 side_wins = score > 0
