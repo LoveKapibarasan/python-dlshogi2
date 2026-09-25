@@ -51,7 +51,10 @@ echo "metrics    : $METRICS_DIR/match-${EXPERIMENT}-${STAMP}.jsonl"
 echo "log        : $LOG"
 
 if [ "$FOREGROUND" = 1 ]; then
-    exec "$PYTHON" -m pydlshogi2.match "${args[@]}" "$@" 2>&1 | tee "$LOG"
+    # exec はパイプラインの中では効かない (サブシェルを置き換えるだけ) ので、
+    # 明示的に抜けないと下の nohup で同じ対局がもう一度走る
+    "$PYTHON" -m pydlshogi2.match "${args[@]}" "$@" 2>&1 | tee "$LOG"
+    exit "${PIPESTATUS[0]}"
 fi
 
 nohup "$PYTHON" -m pydlshogi2.match "${args[@]}" "$@" > "$LOG" 2>&1 &
