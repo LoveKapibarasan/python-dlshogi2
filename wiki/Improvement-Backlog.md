@@ -31,8 +31,16 @@ run and how to read its verdict.
 | EXP-005 | `batchsize` と virtual loss の見直し | tuning | +0〜30 | 小 | 未着手 | [#9](https://github.com/LoveKapibarasan/python-dlshogi2/issues/9) |
 | EXP-006 | 局面評価の呼び出し経路を JIT 化する (numba / Cython) | search | +20〜60 (EXP-001 後の実測で下方修正) | 中 | 未着手 | [#10](https://github.com/LoveKapibarasan/python-dlshogi2/issues/10) |
 | EXP-007 | 特徴量生成と `make_move_label` のベクトル化 | search | +5〜15 | 小 | 未着手 | [#11](https://github.com/LoveKapibarasan/python-dlshogi2/issues/11) |
-| EXP-008 | 詰み探索の深さをルート以外にも広げる | search | +10〜40 | 中 | 未着手 | [#12](https://github.com/LoveKapibarasan/python-dlshogi2/issues/12) |
+| EXP-008 | 詰み探索の深さをルート以外にも広げる | search | +10〜40 → **実測 5 手で +17 ± 59 (決着せず)** | 中 | **保留** | [#12](https://github.com/LoveKapibarasan/python-dlshogi2/issues/12) |
 | EXP-009 | ネットワークの再学習 (20×256 SE, Floodgate 全体) | training | +200 以上 | 大 (GPU が足りない) | 保留 | [#13](https://github.com/LoveKapibarasan/python-dlshogi2/issues/13) |
+| EXP-010 | 水匠10 を教師にした蒸留 (自己対局 2 万ノード/手の最善手・評価値・勝敗で再学習) | training | +300 以上 | 大 (生成 CPU 数日 + 学習 GPU) | **実施中** | — |
+
+## 目標: 同じ PC で YaneuraOu + 水匠に勝ち越す (2026-09-26 追加)
+
+実測の差は **700〜900 Elo** ([Experiment Log](Experiment-Log) の GAP)。
+この目標に対しては、期待値が数十 Elo の探索改善は順位を大きく下げ、
+モデルの質を替える案 (EXP-010 蒸留、EXP-009 再学習) と、探索を桁で速くする案
+(EXP-006 以上、C++ 化) を優先する。
 
 ## なぜこの順番なのか
 
