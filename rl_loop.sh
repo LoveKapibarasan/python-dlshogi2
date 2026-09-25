@@ -29,6 +29,9 @@ GPU="${GPU:-0}"
 WORKDIR="${WORKDIR:-rl}"           # where iteration artifacts are written
 PYTHON="${PYTHON:-python}"         # python interpreter (set to .venv/bin/python on Vast.ai)
 METRICS_DIR="${METRICS_DIR:-$WORKDIR/metrics}"  # structured metrics for the dashboard
+WINDOW="${WINDOW:-0}"              # train on the latest N iterations' data only (0 = all)
+SELFPLAY_ARGS="${SELFPLAY_ARGS:-}" # extra pydlshogi2.selfplay arguments (e.g. --temp_cutoff 999)
+TRAIN_ARGS="${TRAIN_ARGS:-}"       # extra pydlshogi2.train arguments (e.g. --amp --amp_dtype float16)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -69,13 +72,19 @@ for i in $(seq 1 "$ITERATIONS"); do
         WORKERS="$WORKERS" GAMES="$GAMES" PLAYOUTS="$PLAYOUTS" \
             BATCHSIZE="$SELFPLAY_BATCHSIZE" GPU="$GPU" PYTHON="$PYTHON" \
             METRICS_PREFIX="$METRICS_DIR/selfplay-$(printf '%03d' "$i")" ITERATION="$i" \
-            "$SCRIPT_DIR/selfplay_parallel.sh" "$CURRENT" "$DATA"
+            "$SCRIPT_DIR/selfplay_parallel.sh" "$CURRENT" "$DATA" $SELFPLAY_ARGS
     fi
 
     echo "[2/2] train -> $NEXT"
-    # Train on all self-play data generated so far (the test split reuses the
-    # latest batch for a quick sanity metric).
-    "$PYTHON" -m pydlshogi2.train "$WORKDIR"/selfplay-*.hcpe "$DATA" \
+    # Train on the self-play data of the latest WINDOW iterations (all of it when
+    # WINDOW=0).  From a random start the oldest games are the weakest, and
+    # keeping them forever drags the model back towards random play.  The test
+    # split reuses the latest batch for a quick sanity metric.
+    TRAIN_DATA=( "$WORKDIR"/selfplay-*.hcpe )
+    if [ "$WINDOW" -gt 0 ] && [ "${#TRAIN_DATA[@]}" -gt "$WINDOW" ]; then
+        TRAIN_DATA=( "${TRAIN_DATA[@]: -$WINDOW}" )
+    fi
+    "$PYTHON" -m pydlshogi2.train "${TRAIN_DATA[@]}" "$DATA" $TRAIN_ARGS \
         --resume "$CURRENT" \
         --epoch "$EPOCHS" \
         --batchsize "$BATCHSIZE" \

@@ -175,6 +175,9 @@ def play_game(engine, playouts, max_moves, temperature, temp_cutoff):
     game_result = DRAW
     # to_hcp に渡す書き込み可能なhcpバッファ (フィールドビュー)
     hcp_buffer = np.zeros(1, HuffmanCodedPosAndEval)
+    # 局面の出現回数。board.is_draw() は1回の繰り返しで千日手と判定する (探索用) ので、
+    # 終局は本来のルールどおり同一局面4回で判定する
+    seen = {board.zobrist_hash(): 1}
 
     while True:
         # 終局判定 (手番側の視点)
@@ -185,7 +188,7 @@ def play_game(engine, playouts, max_moves, temperature, temp_cutoff):
         if board.is_nyugyoku():
             game_result = BLACK_WIN if board.turn == BLACK else WHITE_WIN
             break
-        draw = board.is_draw()
+        draw = board.is_draw() if seen.get(board.zobrist_hash(), 0) >= 4 else NOT_REPETITION
         if draw == REPETITION_DRAW:
             game_result = DRAW
             break
@@ -223,6 +226,8 @@ def play_game(engine, playouts, max_moves, temperature, temp_cutoff):
         # 着手
         board.push(played_move)
         usi_moves.append(move_to_usi(played_move))
+        key = board.zobrist_hash()
+        seen[key] = seen.get(key, 0) + 1
 
     return records, game_result
 
