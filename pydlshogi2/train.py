@@ -44,6 +44,9 @@ parser.add_argument('--fcl', type=int, default=256, help='value head fully-conne
 parser.add_argument('--no_se', action='store_true', help='disable Squeeze-and-Excitation blocks')
 # 高速化オプション
 parser.add_argument('--amp', action='store_true', help='enable bfloat16 autocast (mixed precision)')
+parser.add_argument('--amp_dtype', choices=['bfloat16', 'float16'], default='bfloat16',
+                    help='autocast dtype for --amp; float16 (with loss scaling) for GPUs '
+                         'without fast bfloat16, e.g. Turing (RTX 20xx)')
 parser.add_argument('--compile', action='store_true', help='wrap the model with torch.compile')
 args = parser.parse_args()
 
@@ -118,7 +121,9 @@ if args.compile:
 
 # AMP (bfloat16 autocast)
 amp_enabled = args.amp and device.type == 'cuda'
-amp_dtype = torch.bfloat16
+amp_dtype = torch.float16 if args.amp_dtype == 'float16' else torch.bfloat16
+# float16 は勾配がアンダーフローするので損失をスケーリングする (bfloat16 では不要)
+scaler = torch.amp.GradScaler('cuda', enabled=amp_enabled and amp_dtype == torch.float16)
 
 # 訓練データ読み込み
 logging.info('Reading training data')
@@ -184,8 +189,9 @@ for e in range(args.epoch):
             loss = loss_policy + loss_value
         # 誤差逆伝播
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
         # トータルステップ数に加算
         t += 1
