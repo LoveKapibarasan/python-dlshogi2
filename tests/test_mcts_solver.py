@@ -97,6 +97,13 @@ class PropagateProofTest(unittest.TestCase):
         propagate_proof(node, 1)
         self.assertEqual(node.value, 0.5)
 
+    def test_a_child_proven_lost_gets_an_exact_loss_value(self):
+        node = make_parent([VALUE_WIN, 0.5], counts=[10, 4])
+        propagate_proof(node, 0)
+        self.assertEqual(node.child_sum_value[0], 0.0)
+        self.assertEqual(node.child_q[0], 0.0)
+        self.assertEqual(node.value, 0.5)
+
     def test_a_proven_node_stays_proven(self):
         node = make_parent([VALUE_WIN, VALUE_WIN])
         node.value = VALUE_WIN
@@ -119,6 +126,13 @@ class SelectRootMoveTest(unittest.TestCase):
 
     def test_proven_loss_is_never_played(self):
         node = make_parent([VALUE_WIN, 0.5, 0.5], counts=[90, 5, 7])
+        self.assertEqual(self.player.select_root_move(node), (2, None))
+
+    def test_only_unvisited_moves_left(self):
+        # 訪問済みの手が全部負けと証明され、未訪問の手しか残っていない。
+        # 以前は訪問数0の手の勝率を 0/0 で求めて例外になり、bestmove が返らなかった
+        node = make_parent([VALUE_WIN, 'absent', 'absent'], counts=[90, 0, 0])
+        node.set_policy(np.array([0.5, 0.1, 0.4], dtype=np.float32))
         self.assertEqual(self.player.select_root_move(node), (2, None))
 
     def test_all_lost_still_returns_a_move(self):

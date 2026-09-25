@@ -98,6 +98,11 @@ def propagate_proof(current_node, next_index):
     Draws are not propagated: a node where the best proven result is a draw
     still has unproven children that might do better.
 
+    A child proven won for the opponent also has its mean value reset to an
+    exact loss.  Visits made before the proof averaged in the network's
+    optimism, and left alone they keep attracting playouts to a move that is
+    already known to lose.
+
     Called after every backup that went through ``next_index``, so a proof
     found deep in the tree climbs one level per playout that reaches it — and
     because a proven node is never descended into again, it climbs on the very
@@ -113,6 +118,10 @@ def propagate_proof(current_node, next_index):
     if child_value == VALUE_LOSE:
         current_node.value = VALUE_WIN
     elif child_value == VALUE_WIN:
+        # 証明前の訪問で残った楽観的な平均を、厳密な負けに揃える
+        if current_node.child_sum_value.item(next_index) != 0.0:
+            current_node.child_sum_value[next_index] = 0.0
+            current_node.refresh_child(next_index)
         for child in current_node.child_node:
             if child is None or child.value != VALUE_WIN:
                 return
@@ -621,8 +630,11 @@ class MCTSPlayer(BasePlayer):
         # 選択した着手の勝率の算出
         if proven is not None:
             bestvalue = proven
-        else:
+        elif current_node.child_move_count[selected_index] > 0:
             bestvalue = current_node.child_sum_value[selected_index] / current_node.child_move_count[selected_index]
+        else:
+            # 訪問済みの手がすべて負けと証明され、未訪問の手しか残っていない
+            bestvalue = current_node.value
 
         bestmove = current_node.child_move[selected_index]
 
@@ -663,6 +675,9 @@ class MCTSPlayer(BasePlayer):
           most visited one if there are several.
         * A child proven won for the opponent is never played, however many
           visits it collected before the proof — unless every move is lost.
+          The remaining moves are ranked by visits, then by prior, so the
+          choice is still sensible when every visited move turned out lost
+          and only unvisited ones are left.
 
         :returns: ``(index, proven_value)`` where ``proven_value`` is ``1.0``
             for a forced win, ``0.0`` when every move is proven lost, and
@@ -689,9 +704,9 @@ class MCTSPlayer(BasePlayer):
             return np.argmax(counts), None
         if len(lost) == len(counts):
             return np.argmax(counts), 0.0
-        masked = counts.astype(np.int64)
-        masked[lost] = -1
-        return np.argmax(masked), None
+        lost = set(lost)
+        return max((i for i in range(len(counts)) if i not in lost),
+                   key=lambda i: (counts.item(i), node.policy_list[i])), None
 
     # 探索を打ち切るか確認
     def check_interruption(self):
