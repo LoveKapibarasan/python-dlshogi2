@@ -40,7 +40,7 @@ body:
       label: Component
       options:
         - Training (pydlshogi2.train)
-        - Data conversion (utils/, human/)
+        - Data conversion (utils/)
         - Self-play / RL loop
         - Player (PyTorch)
         - Player (ONNX)
