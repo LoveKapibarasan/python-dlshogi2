@@ -41,6 +41,7 @@ from cshogi import (
 )
 
 from pydlshogi2.player.mcts_player import MCTSPlayer
+from pydlshogi2.player.native_mcts_player import NativeMCTSPlayer
 from pydlshogi2.metrics import MetricsWriter, gpu_name
 
 # 評価値クリッピング上限 (16bit格納のため)
@@ -120,6 +121,10 @@ class SelfPlayEngine(MCTSPlayer):
         self.last_pv_print_time = 0
         self.search()
 
+    def root_node(self):
+        """The root node: ``child_move``, ``child_move_count`` and ``policy``."""
+        return self.tree.current_head
+
     def root_winrate(self):
         """Return the root win rate for the side to move.
 
@@ -130,6 +135,47 @@ class SelfPlayEngine(MCTSPlayer):
         if node.move_count > 0:
             return float(node.sum_value / node.move_count)
         return float(node.value)
+
+
+class NativeSelfPlayEngine(NativeMCTSPlayer):
+    """:class:`SelfPlayEngine` on the native search: the same game generation,
+    several times the playouts per second.
+
+    :param dirichlet_alpha: concentration of the root Dirichlet noise.
+    :param noise_eps: mixing weight of the noise (``0`` disables it).
+    """
+
+    def __init__(self, dirichlet_alpha=0.15, noise_eps=0.25):
+        super().__init__()
+        self.dirichlet_alpha = dirichlet_alpha
+        self.noise_eps = noise_eps
+        self.pv_interval = 0
+
+    def think(self, playouts):
+        """Evaluate the root, mix noise into its prior and search ``playouts`` times."""
+        self._apply_params()
+        self.lib.uct_prepare_root(self.handle)
+        if self.noise_eps > 0.0:
+            policy = self.root_policy()
+            if len(policy):
+                noise = np.random.dirichlet([self.dirichlet_alpha] * len(policy))
+                self.set_root_policy((1.0 - self.noise_eps) * policy + self.noise_eps * noise)
+        self.playout_count = 0
+        self.halt = playouts
+        self.begin_time = time.time()
+        self.last_pv_print_time = 0
+        self.lib.uct_search(self.handle, playouts)
+
+    def root_node(self):
+        root = self._refresh_root()
+        root.policy = self.root_policy()
+        return root
+
+    def root_winrate(self):
+        root = self._refresh_root()
+        if root.move_count > 0:
+            return float(root.sum_value / root.move_count)
+        return float(root.value)
 
 
 def select_move(child_move, child_move_count, temperature, allowed=None, policy=None):
@@ -223,7 +269,7 @@ def play_game(engine, playouts, max_moves, temperature, temp_cutoff, avoid_repet
         engine.position('startpos', usi_moves)
         engine.think(playouts)
 
-        node = engine.tree.current_head
+        node = engine.root_node()
         if node.child_move is None or len(node.child_move) == 0:
             game_result = WHITE_WIN if board.turn == BLACK else BLACK_WIN
             break
@@ -277,6 +323,9 @@ def main():
     parser.add_argument('--skip_draws', action='store_true',
                         help='do not write drawn games: they carry no win/loss signal '
                              'and, from scratch, only teach the network to draw')
+    parser.add_argument('--native', action='store_true',
+                        help='search with the native C++ core (pydlshogi2/uct/native; build it '
+                             'first) — several times the playouts per second')
     parser.add_argument('--gpu', type=int, default=0, help='GPU id (-1 for CPU)')
     parser.add_argument('--batchsize', type=int, default=32, help='inference batch size')
     parser.add_argument('--seed', type=int, default=None,
@@ -298,7 +347,8 @@ def main():
         extra={'iteration': args.iteration, 'worker': args.seed,
                'gpu_name': gpu_name(args.gpu)})
 
-    engine = SelfPlayEngine(dirichlet_alpha=args.dirichlet_alpha, noise_eps=args.noise_eps)
+    engine_class = NativeSelfPlayEngine if args.native else SelfPlayEngine
+    engine = engine_class(dirichlet_alpha=args.dirichlet_alpha, noise_eps=args.noise_eps)
     engine.modelfile = args.modelfile
     engine.gpu_id = args.gpu
     engine.batch_size = args.batchsize

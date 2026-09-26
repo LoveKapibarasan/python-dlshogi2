@@ -63,6 +63,9 @@ def load_library(path=LIBRARY):
     lib.uct_root_info.argtypes = [p, ip, ctypes.POINTER(d), fp]
     lib.uct_pv.argtypes = [p, i, ip, i]
     lib.uct_pv.restype = i
+    lib.uct_get_root_policy.argtypes = [p, fp, i]
+    lib.uct_get_root_policy.restype = i
+    lib.uct_set_root_policy.argtypes = [p, fp, i]
     return lib
 
 
@@ -242,6 +245,17 @@ class NativeMCTSPlayer(MCTSPlayer):
         moves = np.asarray(self._moves, dtype=np.int32)
         self.lib.uct_set_position(self.handle, self._start.encode('ascii'),
                                   _ptr(moves, ctypes.c_int), len(moves))
+
+    def root_policy(self):
+        """The root prior (one entry per root child), as a float32 array."""
+        out = np.zeros(MAX_MOVES, dtype=np.float32)
+        n = self.lib.uct_get_root_policy(self.handle, _ptr(out, ctypes.c_float), MAX_MOVES)
+        return out[:n].copy()
+
+    def set_root_policy(self, policy):
+        """Replace the root prior (e.g. with Dirichlet noise mixed in)."""
+        policy = np.ascontiguousarray(policy, dtype=np.float32)
+        self.lib.uct_set_root_policy(self.handle, _ptr(policy, ctypes.c_float), len(policy))
 
     def _refresh_root(self):
         n = self.lib.uct_root_stats(self.handle, _ptr(self._stats_moves, ctypes.c_int),

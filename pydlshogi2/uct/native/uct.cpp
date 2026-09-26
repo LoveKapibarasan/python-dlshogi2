@@ -609,11 +609,21 @@ void uct_debug_root_features(void* h, float* out) {
     auto* s = (Searcher*)h;
     s->make_input_features(s->root_board, out);
 }
-// デバッグ用: ルートの方策 (子の数だけ)
-int uct_debug_root_policy(void* h, float* out, int maxn) {
+}
+
+extern "C" {
+// ルートの方策を読む (子の数を返す)
+int uct_get_root_policy(void* h, float* out, int maxn) {
     auto* s = (Searcher*)h;
     const int n = (int)s->current_head->policy.size();
     for (int i = 0; i < n && i < maxn; i++) out[i] = s->current_head->policy[i];
     return n;
+}
+// ルートの方策を差し替える (自己対局の Dirichlet ノイズ用)。選択のキャッシュも作り直す
+void uct_set_root_policy(void* h, const float* p, int n) {
+    auto* s = (Searcher*)h;
+    Node* root = s->current_head;
+    if ((int)root->child_move.size() != n) return;
+    root->set_policy(std::vector<float>(p, p + n));
 }
 }
