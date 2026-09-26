@@ -63,11 +63,14 @@ def softmax_temperature_with_normalize(logits, temperature):
     logits /= temperature
 
     # 確率を計算(オーバーフローを防止するため最大値で引く)
-    max_logit = max(logits)
+    # 組み込みの max/sum は numpy 配列を1要素ずつ回るので遅い
+    max_logit = logits.max()
     probabilities = np.exp(logits - max_logit)
 
     # 合計が1になるように正規化
-    sum_probabilities = sum(probabilities)
+    # cumsum は先頭から順に足すので、組み込みの sum と同じ float32 の値になる
+    # (np.sum はペアワイズ加算で最下位ビットが変わり、探索が決定的に同じでなくなる)
+    sum_probabilities = probabilities.cumsum()[-1]
     probabilities /= sum_probabilities
 
     return probabilities
@@ -694,12 +697,9 @@ class MCTSPlayer(BasePlayer):
             current_node = self.eval_queue[i].node
             color = self.eval_queue[i].color
 
-            # 合法手一覧
-            legal_move_probabilities = np.empty(len(current_node.child_move), dtype=np.float32)
-            for j in range(len(current_node.child_move)):
-                move = current_node.child_move[j]
-                move_label = self.make_move_label(move, color)
-                legal_move_probabilities[j] = policy_logit[move_label]
+            # 合法手のラベルを集めて、方策の出力から一度に取り出す
+            labels = [make_move_label(move, color) for move in current_node.child_move]
+            legal_move_probabilities = policy_logit[labels]
 
             # Boltzmann分布
             probabilities = softmax_temperature_with_normalize(legal_move_probabilities, self.temperature)
