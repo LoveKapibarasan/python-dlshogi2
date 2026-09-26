@@ -25,6 +25,7 @@ import torch
 from cshogi import move_to_usi
 
 from pydlshogi2.features import MOVE_LABELS_NUM
+from pydlshogi2.network.policy_value_resnet import fuse_for_inference
 from pydlshogi2.player.mcts_player import MCTSPlayer, VALUE_WIN
 
 LIBRARY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -63,6 +64,9 @@ def load_library(path=LIBRARY):
     lib.uct_root_info.argtypes = [p, ip, ctypes.POINTER(d), fp]
     lib.uct_pv.argtypes = [p, i, ip, i]
     lib.uct_pv.restype = i
+    lib.uct_set_root_dfpn.argtypes = [p, ctypes.c_uint]
+    lib.uct_root_mate_move.argtypes = [p]
+    lib.uct_root_mate_move.restype = i
     lib.uct_get_root_policy.argtypes = [p, fp, i]
     lib.uct_get_root_policy.restype = i
     lib.uct_set_root_policy.argtypes = [p, fp, i]
@@ -98,6 +102,13 @@ class NativeMCTSPlayer(MCTSPlayer):
         self.fast_inference = True
         # 木の中 (ノード展開時) の詰み探索手数。探索は GPU 待ちなので、CPU の余りで深く読める
         self.mate_tree_ply = 3
+        # GPU 評価と降下を重ねるバッチ枠の数 (2 以上)。枠を増やすと GPU が空く時間が減る
+        self.slots = 2
+        # BatchNorm を畳み込みに吸収して推論する
+        self.fuse_bn = True
+        # 探索と並行してルートで回す df-pn 詰み探索のノード数 (0 で無効)。
+        # 探索は GPU 待ちで CPU は余っているので、長い詰みを別スレッドで探す
+        self.root_dfpn_nodes = 0
         self.lib = None
         self.handle = None
         self.native_tree = _TreeView()
@@ -108,10 +119,16 @@ class NativeMCTSPlayer(MCTSPlayer):
         super().usi()
         print('option name fast_inference type check default true')
         print('option name mate_tree_ply type spin default 3 min 3 max 15')
+        print('option name slots type spin default 2 min 2 max 4')
+        print('option name root_dfpn_nodes type spin default 0 min 0 max 100000000')
 
     def setoption(self, args):
         if args[1] == 'fast_inference':
             self.fast_inference = args[3] == 'true'
+        elif args[1] == 'root_dfpn_nodes':
+            self.root_dfpn_nodes = int(args[3])
+        elif args[1] == 'slots':
+            self.slots = int(args[3])
         elif args[1] == 'mate_tree_ply':
             # mate_move は3手以上の奇数しか受け付けない
             self.mate_tree_ply = max(3, int(args[3]) | 1)
@@ -128,7 +145,7 @@ class NativeMCTSPlayer(MCTSPlayer):
         self.graphs = None
         if self.fast_inference and self.device.type == 'cuda':
             # 2 スロット: GPU が片方を評価している間に、探索がもう片方を集める
-            nslots = 2
+            nslots = self.slots
             self.features = torch.empty((nslots * self.batch_size,) + tuple(self.features.shape[1:]),
                                         dtype=torch.float32, pin_memory=True)
             self._capture_graphs(nslots)
@@ -156,6 +173,7 @@ class NativeMCTSPlayer(MCTSPlayer):
     def _apply_params(self):
         self.lib.uct_set_params(self.handle, self.c_puct, self.c_base, self.fpu_reduction,
                                 self.temperature, self.mate_tree_ply)
+        self.lib.uct_set_root_dfpn(self.handle, self.root_dfpn_nodes)
 
     def _capture_graphs(self, nslots):
         """Capture, per slot, one fp16 channels-last forward pass of a full batch.
@@ -168,7 +186,12 @@ class NativeMCTSPlayer(MCTSPlayer):
         one slot can be evaluated while the search fills the other.
         """
         torch.backends.cudnn.benchmark = True
-        model = self.model.half().to(memory_format=torch.channels_last)
+        # BatchNorm を畳み込みに吸収してから fp16 / channels-last にする
+        # グラフは重みのアドレスを覚えているだけなので、モデルへの参照を持ち続ける。
+        # 手放すと重みのメモリが解放・再利用され、グラフがゴミを読んで NaN を返す
+        model = fuse_for_inference(self.model) if self.fuse_bn else self.model
+        model = model.half().to(memory_format=torch.channels_last)
+        self.graph_model = model
         B = self.batch_size
         shape = (B,) + tuple(self.features.shape[1:])
         self.stream = torch.cuda.Stream()
@@ -329,6 +352,12 @@ class NativeMCTSPlayer(MCTSPlayer):
         self.last_pv_print_time = 0
         self.lib.uct_search(self.handle, -1)
         self.playout_count = self.lib.uct_playout_count(self.handle)
+
+        # 並行した df-pn が詰みを見つけていれば、それを指す
+        matemove = self.lib.uct_root_mate_move(self.handle)
+        if matemove:
+            print('info score mate + pv {}'.format(move_to_usi(matemove)), flush=True)
+            return move_to_usi(matemove), None
 
         bestmove, bestvalue, ponder_move = self.get_bestmove_and_print_pv()
         if bestvalue < self.resign_threshold:

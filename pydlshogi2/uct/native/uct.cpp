@@ -23,6 +23,9 @@
 #include <vector>
 #include <algorithm>
 #include <limits>
+#include <chrono>
+#include <atomic>
+#include <thread>
 
 #include "cshogi.h"
 
@@ -165,7 +168,7 @@ struct Slot {
 
 struct Searcher {
     int batch_size;
-    Slot slots[2];
+    std::vector<Slot> slots;          // 1 つなら逐次、2 つ以上なら GPU と降下を重ねる
     Slot* cur;                        // queue_node が積む先
     EvalCallback eval_cb = nullptr;
     InterruptCallback interrupt_cb = nullptr;
@@ -187,13 +190,25 @@ struct Searcher {
 
     long long playout_count = 0;
 
+    // ルートの df-pn 詰み探索 (探索と並行して別スレッドで走る)
+    uint32_t root_dfpn_nodes = 0;     // 0 なら使わない
+    std::atomic<int> root_mate_move{0};
+    std::atomic<bool> root_mate_done{false};
+    std::thread dfpn_thread;
+    DfPn dfpn;
+    // 時間の内訳 (秒): 降下, 評価の反映, バックアップ, GPU 待ち, 投入, 打ち切り判定
+    double t_collect = 0, t_apply = 0, t_finish = 0, t_wait = 0, t_launch = 0, t_interrupt = 0;
+    long long n_discard = 0;
+    static double now() {
+        return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
     // バッファは nslots 個のスロットが連続して並んでいる
-    Searcher(int bs, int nslots, float* f, float* p, float* v) : batch_size(bs) {
-        for (int k = 0; k < 2; k++) {
-            const int o = k < nslots ? k : 0;
-            slots[k].features = f + (size_t)o * bs * FEATURES_NUM * 81;
-            slots[k].policy_out = p + (size_t)o * bs * MOVE_LABELS_NUM;
-            slots[k].value_out = v + (size_t)o * bs;
+    Searcher(int bs, int nslots, float* f, float* p, float* v) : batch_size(bs), slots(nslots) {
+        for (int k = 0; k < nslots; k++) {
+            slots[k].features = f + (size_t)k * bs * FEATURES_NUM * 81;
+            slots[k].policy_out = p + (size_t)k * bs * MOVE_LABELS_NUM;
+            slots[k].value_out = v + (size_t)k * bs;
             slots[k].queue.resize(bs);
             slots[k].batch.resize(bs);
         }
@@ -258,7 +273,10 @@ struct Searcher {
             }
             for (size_t j = 0; j < m; j++) logits[j] /= sum;
             node->set_policy(logits);
-            node->value = slot.value_out[i];
+            // NaN は「評価待ち」の印なので、ネットワークが NaN を返したら中立の値にする
+            // (そのままだと、そのノードに来る降下が永遠に破棄され探索が進まない)
+            const float v = slot.value_out[i];
+            node->value = std::isnan(v) ? 0.5f : v;
         }
     }
 
@@ -366,6 +384,7 @@ struct Searcher {
             traj.clear();
             const double result = uct_search(root_board, current_head, traj);
             unwind(traj.size());
+            if (result == DISCARDED) n_discard++;
             if (result != DISCARDED) {
                 playout_count++;
             } else {
@@ -402,11 +421,47 @@ struct Searcher {
     }
 
     bool should_stop(long long max_playouts) {
+        // 詰みが見つかったらそれ以上読む必要はない
+        if (root_mate_move != 0) return true;
         if (max_playouts >= 0 && playout_count >= max_playouts) return true;
         return interrupt_cb && interrupt_cb();
     }
 
+    // ルート局面のコピーで df-pn を回す。探索木には一切触れない
+    void start_root_dfpn() {
+        root_mate_move = 0;
+        root_mate_done = false;
+        if (root_dfpn_nodes == 0) return;
+        const std::string sfen = root_board.toSFEN();
+        dfpn.set_max_search_node(root_dfpn_nodes);
+        dfpn.set_maxdepth(63);
+        dfpn.set_draw_ply(512);
+        dfpn.dfpn_stop(false);
+        dfpn_thread = std::thread([this, sfen]() {
+            __Board board(sfen);
+            if (!board.pos.inCheck() && dfpn.dfpn(board.pos)) {
+                const Move move = dfpn.dfpn_move(board.pos);
+                root_mate_move = move.value();
+            }
+            root_mate_done = true;
+        });
+    }
+
+    void stop_root_dfpn() {
+        if (dfpn_thread.joinable()) {
+            dfpn.dfpn_stop(true);
+            dfpn_thread.join();
+        }
+    }
+
     long long search(long long max_playouts) {
+        start_root_dfpn();
+        const long long n = search_body(max_playouts);
+        stop_root_dfpn();
+        return n;
+    }
+
+    long long search_body(long long max_playouts) {
         if (!launch_cb) {
             // MCTSPlayer.search と同じ逐次版
             while (true) {
@@ -416,28 +471,53 @@ struct Searcher {
                 if (should_stop(max_playouts)) return playout_count;
             }
         }
-        // 2 スロットを交互に使い、GPU の評価と次のバッチの降下を重ねる
-        int a = 0;
-        collect(slots[a]);
-        if (slots[a].nbatch > 0) launch_cb(a, slots[a].count);
-        while (true) {
-            const int b = 1 - a;
-            collect(slots[b]);
-            if (slots[b].nbatch > 0) launch_cb(b, slots[b].count);
-            if (slots[a].nbatch > 0) {
-                wait_cb(a);
-                apply_eval(slots[a]);
+        // スロットを輪番で使い、GPU が古いバッチを評価している間に次のバッチを降下する
+        const int S = (int)slots.size();
+        auto launch = [&](int k) {
+            const double t = now();
+            if (slots[k].nbatch > 0) launch_cb(k, slots[k].count);
+            t_launch += now() - t;
+        };
+        auto complete = [&](int k) {
+            double t = now();
+            if (slots[k].nbatch > 0) {
+                wait_cb(k);
+                const double t2 = now();
+                t_wait += t2 - t;
+                apply_eval(slots[k]);
+                t = now();
+                t_apply += t - t2;
             }
-            finish(slots[a]);
-            if (should_stop(max_playouts)) {
-                if (slots[b].nbatch > 0) {
-                    wait_cb(b);
-                    apply_eval(slots[b]);
+            finish(slots[k]);
+            t_finish += now() - t;
+        };
+        auto timed_collect = [&](int k) {
+            const double t = now();
+            collect(slots[k]);
+            t_collect += now() - t;
+        };
+        for (int k = 0; k < S - 1; k++) {
+            timed_collect(k);
+            launch(k);
+        }
+        int oldest = 0, next = S - 1;
+        while (true) {
+            timed_collect(next);
+            launch(next);
+            complete(oldest);
+            const double ti = now();
+            const bool stop = should_stop(max_playouts);
+            t_interrupt += now() - ti;
+            if (stop) {
+                // 投げてある残りのバッチを古い順に片付ける
+                for (int k = (oldest + 1) % S;; k = (k + 1) % S) {
+                    complete(k);
+                    if (k == next) break;
                 }
-                finish(slots[b]);
                 return playout_count;
             }
-            a = b;
+            oldest = (oldest + 1) % S;
+            next = (next + 1) % S;
         }
     }
 
@@ -492,7 +572,7 @@ struct Searcher {
 
 extern "C" {
 
-// バッファは nslots (1 か 2) スロット分、スロットごとに batch_size 局面ぶん並べる
+// バッファは nslots スロット分、スロットごとに batch_size 局面ぶん並べる
 void* uct_new(int batch_size, int nslots, float* features, float* policy_out, float* value_out) {
     static bool initialized = false;
     if (!initialized) {
@@ -508,7 +588,17 @@ void* uct_new(int batch_size, int nslots, float* features, float* policy_out, fl
     return new Searcher(batch_size, nslots, features, policy_out, value_out);
 }
 
-void uct_free(void* h) { delete (Searcher*)h; }
+void uct_free(void* h) {
+    auto* s = (Searcher*)h;
+    s->stop_root_dfpn();
+    delete s;
+}
+
+// 探索と並行して走らせるルートの df-pn の探索ノード数 (0 で無効)
+void uct_set_root_dfpn(void* h, unsigned int nodes) { ((Searcher*)h)->root_dfpn_nodes = nodes; }
+
+// 直前の探索でルートの df-pn が見つけた詰みの初手 (無ければ 0)
+int uct_root_mate_move(void* h) { return ((Searcher*)h)->root_mate_move; }
 
 void uct_set_params(void* h, double c_puct, double c_base, double fpu_reduction,
                     double temperature, int mate_tree_ply) {
@@ -527,7 +617,7 @@ void uct_set_callbacks(void* h, EvalCallback eval_cb, InterruptCallback interrup
 }
 
 // launch(slot, n) は評価を GPU に投げてすぐ戻り、wait(slot) はその完了を待つ。
-// 設定すると、探索は 2 スロットで GPU と CPU を重ねて回す (nslots=2 で作ること)
+// 設定すると、探索は全スロットを輪番に使って GPU と CPU を重ねる (nslots >= 2 で作ること)
 void uct_set_pipeline(void* h, LaunchCallback launch_cb, WaitCallback wait_cb) {
     auto* s = (Searcher*)h;
     s->launch_cb = launch_cb;
@@ -625,5 +715,18 @@ void uct_set_root_policy(void* h, const float* p, int n) {
     Node* root = s->current_head;
     if ((int)root->child_move.size() != n) return;
     root->set_policy(std::vector<float>(p, p + n));
+}
+}
+
+extern "C" {
+// 探索時間の内訳 (秒): collect, apply, finish, wait, launch, interrupt と、破棄した降下の数。
+// out は 7 要素。呼ぶとリセットする
+void uct_profile(void* h, double* out) {
+    auto* s = (Searcher*)h;
+    out[0] = s->t_collect; out[1] = s->t_apply; out[2] = s->t_finish;
+    out[3] = s->t_wait; out[4] = s->t_launch; out[5] = s->t_interrupt;
+    out[6] = (double)s->n_discard;
+    s->n_discard = 0;
+    s->t_collect = s->t_apply = s->t_finish = s->t_wait = s->t_launch = s->t_interrupt = 0;
 }
 }
