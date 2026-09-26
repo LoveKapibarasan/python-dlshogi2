@@ -16,6 +16,7 @@
 **Evaluation**
 - [Evaluation and Rating](Evaluation-and-Rating)
 - [Improvement Backlog](Improvement-Backlog)
+- [Suisho Race](Suisho-Race)
 
 **Records**
 - [Experiment Log](Experiment-Log)

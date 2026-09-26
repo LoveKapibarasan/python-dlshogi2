@@ -37,6 +37,7 @@ here.
 **Deciding what to change**
 
 - [Improvement Backlog](Improvement-Backlog) — proposals for making the engine stronger, ranked by value over cost
+- [Suisho Race](Suisho-Race) — progress towards beating YaneuraOu + Suisho on the same PC
 - [Evaluation and Rating](Evaluation-and-Rating) — how a change is proved: matches, Elo, SPRT, and what 100 games can and cannot tell you
 
 **Records**
