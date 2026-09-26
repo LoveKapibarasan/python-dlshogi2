@@ -132,16 +132,27 @@ class SelfPlayEngine(MCTSPlayer):
         return float(node.value)
 
 
-def select_move(child_move, child_move_count, temperature):
+def select_move(child_move, child_move_count, temperature, allowed=None, policy=None):
     """Pick a move from MCTS visit counts.
 
     :param child_move: list of candidate moves.
     :param child_move_count: visit count per candidate (``ndarray``).
     :param temperature: ``0`` selects the most-visited move; higher values
         sample more uniformly.
+    :param allowed: optional boolean mask; when given and not all ``False``,
+        only these moves are considered (both for playing and as the target).
+    :param policy: the root prior, used to break the tie when none of the
+        allowed moves was visited.
     :returns: a ``(played_move, greedy_move)`` tuple, where ``greedy_move`` is
         always the most-visited move (used as the training target).
     """
+    if allowed is not None and allowed.any() and not allowed.all():
+        child_move_count = np.where(allowed, child_move_count, 0)
+        if child_move_count.sum() == 0:
+            # 許された手が1つも訪問されていない: 事前確率が最大のものを選ぶ
+            scores = np.where(allowed, policy if policy is not None else 1.0, -1.0)
+            move = child_move[int(np.argmax(scores))]
+            return move, move
     greedy_index = int(np.argmax(child_move_count))
     greedy_move = child_move[greedy_index]
 
@@ -157,7 +168,7 @@ def select_move(child_move, child_move_count, temperature):
     return child_move[played_index], greedy_move
 
 
-def play_game(engine, playouts, max_moves, temperature, temp_cutoff):
+def play_game(engine, playouts, max_moves, temperature, temp_cutoff, avoid_repetition=False):
     """Play a single self-play game.
 
     :param engine: a ready :class:`SelfPlayEngine`.
@@ -165,6 +176,12 @@ def play_game(engine, playouts, max_moves, temperature, temp_cutoff):
     :param max_moves: declare a draw after this many plies.
     :param temperature: sampling temperature before ``temp_cutoff``.
     :param temp_cutoff: ply after which moves are chosen greedily.
+    :param avoid_repetition: never play a move that returns to a position
+        already seen in this game, unless every move does.  From a random
+        start, repetition is an attractor: a network that has only ever seen
+        drawn games values everything at 0.5, shuffles its king, and every
+        game ends in fourfold repetition within twenty plies — no win or loss
+        left to learn from.
     :returns: a ``(records, game_result)`` tuple, where ``records`` is a list of
         ``(hcp_ndarray, bestmove16, eval_cp_black_pov)`` and ``game_result`` is a
         cshogi result constant.
@@ -213,7 +230,15 @@ def play_game(engine, playouts, max_moves, temperature, temp_cutoff):
 
         # 着手選択 (温度はtemp_cutoffまで)
         temp = temperature if board.move_number <= temp_cutoff else 0.0
-        played_move, greedy_move = select_move(node.child_move, node.child_move_count, temp)
+        allowed = None
+        if avoid_repetition:
+            allowed = np.empty(len(node.child_move), dtype=bool)
+            for i, move in enumerate(node.child_move):
+                board.push(move)
+                allowed[i] = board.zobrist_hash() not in seen
+                board.pop()
+        played_move, greedy_move = select_move(node.child_move, node.child_move_count, temp,
+                                               allowed, node.policy)
 
         # 教師データを記録 (着手前の局面)
         board.to_hcp(hcp_buffer[0]['hcp'])
@@ -245,6 +270,13 @@ def main():
     parser.add_argument('--temp_cutoff', type=int, default=30, help='ply after which moves are greedy')
     parser.add_argument('--dirichlet_alpha', type=float, default=0.15, help='root Dirichlet alpha')
     parser.add_argument('--noise_eps', type=float, default=0.25, help='root Dirichlet mixing weight')
+    parser.add_argument('--avoid_repetition', action='store_true',
+                        help='never play into a position already seen in the game '
+                             '(unless every move does); keeps a network trained from '
+                             'scratch out of the repetition-draw attractor')
+    parser.add_argument('--skip_draws', action='store_true',
+                        help='do not write drawn games: they carry no win/loss signal '
+                             'and, from scratch, only teach the network to draw')
     parser.add_argument('--gpu', type=int, default=0, help='GPU id (-1 for CPU)')
     parser.add_argument('--batchsize', type=int, default=32, help='inference batch size')
     parser.add_argument('--seed', type=int, default=None,
@@ -280,7 +312,8 @@ def main():
         for g in range(args.games):
             game_started = time.time()
             records, game_result = play_game(
-                engine, args.playouts, args.max_moves, args.temperature, args.temp_cutoff)
+                engine, args.playouts, args.max_moves, args.temperature, args.temp_cutoff,
+                args.avoid_repetition)
             game_elapsed = time.time() - game_started
             if not records:
                 continue
@@ -291,6 +324,10 @@ def main():
                            worker=args.seed, moves=len(records),
                            game_result=int(game_result), seconds=game_elapsed,
                            positions=total_positions + len(records))
+            if args.skip_draws and game_result == DRAW:
+                print('game {}/{} moves={} result=draw (skipped)'.format(
+                    g + 1, args.games, len(records)), flush=True)
+                continue
 
             hcpes = np.zeros(len(records), HuffmanCodedPosAndEval)
             for i, (hcp, bestmove16, eval_black) in enumerate(records):
