@@ -30,6 +30,7 @@ Example
 """
 import argparse
 import glob
+import hashlib
 import os
 import re
 
@@ -134,40 +135,55 @@ def read_text(path):
     return data.decode('utf-8', errors='ignore')
 
 
-def convert(kif_dir, out_dir, shards):
+def convert(kif_dir, out_dir, shards, manifest=None):
     """Convert every KIF under ``kif_dir`` into CSA shard files.
 
     :param kif_dir: directory searched recursively for ``*.kif``.
     :param out_dir: output directory for the ``shogiwars-*.csa`` shards.
     :param shards: number of output CSA files to spread games across (keeps any
         single file from getting unwieldy).
+    :param manifest: optional path of a TSV recording every KIF read
+        (``name  size  sha1  status  shard``) so a model can be traced back to
+        the exact games it was trained on while the corpus keeps growing.
     :returns: ``(converted, skipped)`` game counts.
     """
     os.makedirs(out_dir, exist_ok=True)
     exporters = [CSA.Exporter(os.path.join(out_dir, 'shogiwars-{:02d}.csa'.format(s)))
                  for s in range(shards)]
 
-    kif_files = glob.glob(os.path.join(kif_dir, '**', '*.kif'), recursive=True)
+    kif_files = sorted(glob.glob(os.path.join(kif_dir, '**', '*.kif'), recursive=True))
+    man = open(manifest, 'w', encoding='utf-8') if manifest else None
+    if man:
+        man.write('name\tsize\tsha1\tstatus\tshard\n')
+
+    def record(path, data, status, shard=''):
+        if man:
+            man.write('{}\t{}\t{}\t{}\t{}\n'.format(
+                os.path.relpath(path, kif_dir), len(data), hashlib.sha1(data).hexdigest(), status, shard))
     converted = 0
     skipped = 0
 
     for idx, path in enumerate(kif_files):
+        raw = open(path, 'rb').read()
         try:
             text = read_text(path)
             g = KIF.Parser.parse_str(text)
             g = g[0] if isinstance(g, list) else g
         except Exception:
             skipped += 1
+            record(path, raw, 'parse_error')
             continue
 
         if not g.moves:
             skipped += 1
+            record(path, raw, 'no_moves')
             continue
 
         black_ord, white_ord = parse_ranks(text)
         endgame, _ = infer_result(text, len(g.moves))
         if endgame is None:
             skipped += 1
+            record(path, raw, 'no_result')
             continue
 
         # 段級を順序値としてfloodgate形式のrate行に注入する
@@ -185,9 +201,12 @@ def convert(kif_dir, out_dir, shards):
             board.push(mv)
         exp.endgame(endgame)
         converted += 1
+        record(path, raw, 'converted', 'shogiwars-{:02d}.csa'.format(idx % shards))
 
     for exp in exporters:
         exp.close()
+    if man:
+        man.close()
 
     print('converted={} skipped={} shards={}'.format(converted, skipped, shards))
     return converted, skipped
@@ -200,8 +219,10 @@ def main():
     parser.add_argument('kif_dir', help='directory of Shogi Wars KIF files (searched recursively)')
     parser.add_argument('out_dir', help='output directory for CSA shards')
     parser.add_argument('--shards', type=int, default=8, help='number of output CSA files')
+    parser.add_argument('--manifest', default=None,
+                        help='write a TSV of every KIF read (name, size, sha1, status, shard)')
     args = parser.parse_args()
-    convert(args.kif_dir, args.out_dir, args.shards)
+    convert(args.kif_dir, args.out_dir, args.shards, args.manifest)
 
 
 if __name__ == '__main__':

@@ -9,9 +9,15 @@
 #
 # Every step is skipped when its output already exists, so a re-run resumes.
 #
-#   nohup ./human/run_rank_pipeline.sh > ~/human_data/pipeline.log 2>&1 &
+# The KIF corpus keeps growing, so step 1 writes DATA_DIR/kif_manifest.tsv
+# (name, size, sha1, status, shard of every KIF read) and DATA_DIR/DATASET.md
+# (source, counts, manifest hash). Use a new DATA_DIR for every snapshot.
 #
-# Tunables: KIF_DIR (~/data/kif), CSA_DIR (~/data/csa), DATA_DIR (~/human_data),
+#   DATA_DIR=~/human_data_ranks/20260926 nohup ./human/run_rank_pipeline.sh \
+#       > ~/human_data_ranks/20260926.log 2>&1 &
+#
+# Tunables: KIF_DIR (~/data/kif), DATA_DIR (~/human_data_ranks/latest),
+# CSA_DIR ($DATA_DIR/csa), KIF_SOURCE (free text for DATASET.md),
 # BASE_POSITIONS (20000000), BAND_POSITIONS (4000000), BASE_EPOCHS (1),
 # EPOCHS (2), plus everything train_all_bands.sh takes.
 set -e
@@ -19,8 +25,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 KIF_DIR="${KIF_DIR:-$HOME/data/kif}"
-CSA_DIR="${CSA_DIR:-$HOME/data/csa}"
-export DATA_DIR="${DATA_DIR:-$HOME/human_data}"
+export DATA_DIR="${DATA_DIR:-$HOME/human_data_ranks/latest}"
+CSA_DIR="${CSA_DIR:-$DATA_DIR/csa}"
+KIF_SOURCE="${KIF_SOURCE:-$KIF_DIR}"
 BASE_POSITIONS="${BASE_POSITIONS:-20000000}"
 BAND_POSITIONS="${BAND_POSITIONS:-4000000}"
 BASE_EPOCHS="${BASE_EPOCHS:-1}"
@@ -35,13 +42,34 @@ mkdir -p "$DATA_DIR"
 
 if [ ! -s "$CSA_DIR/shogiwars-00.csa" ]; then
     echo "=== KIF -> CSA ($(date '+%F %T')) ==="
-    "$PYTHON" human/kif_to_csa.py "$KIF_DIR" "$CSA_DIR" --shards 256
+    "$PYTHON" human/kif_to_csa.py "$KIF_DIR" "$CSA_DIR" --shards 256 \
+        --manifest "$DATA_DIR/kif_manifest.tsv"
 fi
 
 if [ ! -s "$DATA_DIR/0028-0028/train.hcpe" ]; then
     echo "=== CSA -> per-rank HCPE ($(date '+%F %T')) ==="
     "$PYTHON" human/csa_to_hcpe_by_rating.py "$CSA_DIR" "$DATA_DIR" \
-        --bands 28,29,30,31,32,33,34,35,36,37 --filter_moves 20
+        --bands 28,29,30,31,32,33,34,35,36,37 --filter_moves 20 | tee "$DATA_DIR/hcpe_counts.txt"
+fi
+
+if [ ! -s "$DATA_DIR/DATASET.md" ]; then
+    {
+        echo "# Shogi Wars rank dataset ($(basename "$DATA_DIR"))"
+        echo
+        echo "- KIF source: $KIF_SOURCE"
+        echo "- KIF dir: \`$KIF_DIR\`"
+        echo "- built: $(date '+%F %T %Z') on $(hostname), repo $(git rev-parse --short HEAD) ($(git rev-parse --abbrev-ref HEAD))"
+        echo "- manifest: \`kif_manifest.tsv\` (name, size, sha1, status, shard), sha256 $(sha256sum "$DATA_DIR/kif_manifest.tsv" | cut -c1-64)"
+        echo "- KIF files by status:"
+        tail -n +2 "$DATA_DIR/kif_manifest.tsv" | cut -f4 | sort | uniq -c | awk '{print "  - " $2 ": " $1}'
+        echo
+        echo "Bands: one per rank ordinal (3級=0028 .. 六段=0036); 0000-0027 and 0037-up are"
+        echo "catch-alls used only in the base model. Records per band/split:"
+        echo
+        echo '```'
+        cat "$DATA_DIR/hcpe_counts.txt"
+        echo '```'
+    } > "$DATA_DIR/DATASET.md"
 fi
 
 # 各帯を BAND_POSITIONS に切り詰めた学習ファイル (帯がそれより小さければ全部)
