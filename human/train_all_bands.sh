@@ -50,7 +50,7 @@ cd "$REPO_DIR"
 for band in $BANDS; do
     train="$DATA_DIR/$band/$TRAIN_NAME"
     test="$DATA_DIR/$band/test.hcpe"
-    if [ ! -s "$train" ] || [ "$(stat -c %s "$test" 2>/dev/null || echo 0)" -lt $((1024 * 38)) ]; then
+    if [ ! -s "$train" ] || [ "$(stat -L -c %s "$test" 2>/dev/null || echo 0)" -lt $((1024 * 38)) ]; then
         echo "=== skip $band (missing $train, or $test has < 1024 positions) ==="
         continue
     fi
