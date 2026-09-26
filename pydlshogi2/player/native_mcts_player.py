@@ -32,6 +32,8 @@ LIBRARY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 EVAL_CALLBACK = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int)
 INTERRUPT_CALLBACK = ctypes.CFUNCTYPE(ctypes.c_int)
+LAUNCH_CALLBACK = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int, ctypes.c_int)
+WAIT_CALLBACK = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int)
 
 # 合法手の最大数 (将棋は593手)
 MAX_MOVES = 600
@@ -42,11 +44,12 @@ def load_library(path=LIBRARY):
     p, i, d, f = ctypes.c_void_p, ctypes.c_int, ctypes.c_double, ctypes.c_float
     fp = ctypes.POINTER(ctypes.c_float)
     ip = ctypes.POINTER(ctypes.c_int)
-    lib.uct_new.argtypes = [i, fp, fp, fp]
+    lib.uct_new.argtypes = [i, i, fp, fp, fp]
     lib.uct_new.restype = p
     lib.uct_free.argtypes = [p]
     lib.uct_set_params.argtypes = [p, d, d, d, d, i]
     lib.uct_set_callbacks.argtypes = [p, EVAL_CALLBACK, INTERRUPT_CALLBACK]
+    lib.uct_set_pipeline.argtypes = [p, LAUNCH_CALLBACK, WAIT_CALLBACK]
     lib.uct_set_position.argtypes = [p, ctypes.c_char_p, ip, i]
     lib.uct_set_position.restype = i
     lib.uct_prepare_root.argtypes = [p]
@@ -113,20 +116,29 @@ class NativeMCTSPlayer(MCTSPlayer):
             self.lib = load_library()
         if self.handle is not None:
             self.lib.uct_free(self.handle)
-        self.graph = None
+        self.graphs = None
         if self.fast_inference and self.device.type == 'cuda':
-            self._capture_graph()
+            # 2 スロット: GPU が片方を評価している間に、探索がもう片方を集める
+            nslots = 2
+            self.features = torch.empty((nslots * self.batch_size,) + tuple(self.features.shape[1:]),
+                                        dtype=torch.float32, pin_memory=True)
+            self._capture_graphs(nslots)
         else:
+            nslots = 1
             self.policy_out = np.zeros((self.batch_size, MOVE_LABELS_NUM), dtype=np.float32)
             self.value_out = np.zeros(self.batch_size, dtype=np.float32)
         self.features_np = self.features.numpy()
-        self.handle = self.lib.uct_new(self.batch_size, _ptr(self.features_np, ctypes.c_float),
+        self.handle = self.lib.uct_new(self.batch_size, nslots, _ptr(self.features_np, ctypes.c_float),
                                        _ptr(self.policy_out, ctypes.c_float),
                                        _ptr(self.value_out, ctypes.c_float))
         # コールバックは参照を保持しておかないと GC で消える
         self._eval_cb = EVAL_CALLBACK(self._evaluate)
         self._interrupt_cb = INTERRUPT_CALLBACK(self._interrupt)
         self.lib.uct_set_callbacks(self.handle, self._eval_cb, self._interrupt_cb)
+        if self.graphs is not None:
+            self._launch_cb = LAUNCH_CALLBACK(self._launch)
+            self._wait_cb = WAIT_CALLBACK(self._wait)
+            self.lib.uct_set_pipeline(self.handle, self._launch_cb, self._wait_cb)
         self._stats_moves = np.zeros(MAX_MOVES, dtype=np.int32)
         self._stats_counts = np.zeros(MAX_MOVES, dtype=np.int32)
         self._stats_sums = np.zeros(MAX_MOVES, dtype=np.float32)
@@ -136,45 +148,69 @@ class NativeMCTSPlayer(MCTSPlayer):
         self.lib.uct_set_params(self.handle, self.c_puct, self.c_base, self.fpu_reduction,
                                 self.temperature, 3)
 
-    def _capture_graph(self):
-        """Capture one fp16, channels-last forward pass of a full batch as a CUDA graph.
+    def _capture_graphs(self, nslots):
+        """Capture, per slot, one fp16 channels-last forward pass of a full batch.
 
         With a 10-block network and a batch of 32, eager PyTorch spends most
         of its time launching kernels one by one; replaying a captured graph
         launches them all at once, and fp16 in channels-last layout runs the
-        convolutions on the tensor cores.  The outputs land in pinned host
-        buffers that the native search reads directly.
+        convolutions on the tensor cores.  Each slot has its own graph and its
+        own pinned output buffers, which the native search reads directly, so
+        one slot can be evaluated while the search fills the other.
         """
+        torch.backends.cudnn.benchmark = True
         model = self.model.half().to(memory_format=torch.channels_last)
-        self.graph_input = torch.zeros((self.batch_size,) + tuple(self.features.shape[1:]),
-                                       dtype=torch.float16, device=self.device
-                                       ).to(memory_format=torch.channels_last)
-        stream = torch.cuda.Stream()
-        stream.wait_stream(torch.cuda.current_stream())
-        with torch.cuda.stream(stream), torch.no_grad():
-            for _ in range(3):
-                model(self.graph_input)
-        torch.cuda.current_stream().wait_stream(stream)
-        self.graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(self.graph), torch.no_grad():
-            policy, value = model(self.graph_input)
-            self.graph_policy = policy.float()
-            self.graph_value = torch.sigmoid(value.float()).reshape(-1)
-        self.policy_pinned = torch.empty(self.graph_policy.shape, dtype=torch.float32, pin_memory=True)
-        self.value_pinned = torch.empty(self.graph_value.shape, dtype=torch.float32, pin_memory=True)
+        B = self.batch_size
+        shape = (B,) + tuple(self.features.shape[1:])
+        self.stream = torch.cuda.Stream()
+        self.graphs = []
+        policy_outs, value_outs = [], []
+        for _ in range(nslots):
+            x = torch.zeros(shape, dtype=torch.float16, device=self.device
+                            ).to(memory_format=torch.channels_last)
+            warm = torch.cuda.Stream()
+            warm.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(warm), torch.no_grad():
+                for _ in range(3):
+                    model(x)
+            torch.cuda.current_stream().wait_stream(warm)
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph), torch.no_grad():
+                policy, value = model(x)
+                policy = policy.float()
+                value = torch.sigmoid(value.float()).reshape(-1)
+            policy_outs.append(policy)
+            value_outs.append(value)
+            self.graphs.append((graph, x, policy, value))
+        # スロットごとの出力を 1 本の pinned バッファに並べる (C++ はスロット順に読む)
+        self.policy_pinned = torch.empty((nslots * B, policy_outs[0].shape[1]), dtype=torch.float32,
+                                         pin_memory=True)
+        self.value_pinned = torch.empty(nslots * B, dtype=torch.float32, pin_memory=True)
         self.policy_out = self.policy_pinned.numpy()
         self.value_out = self.value_pinned.numpy()
+        self.events = [torch.cuda.Event() for _ in range(nslots)]
+
+    def _launch(self, slot, n):
+        B = self.batch_size
+        graph, x, policy, value = self.graphs[slot]
+        with torch.cuda.stream(self.stream):
+            # バッチが満杯でなくても全体を流す (後ろの行は前回の残りで、結果は読まれない)
+            x.copy_(self.features[slot * B:(slot + 1) * B], non_blocking=True)
+            graph.replay()
+            self.policy_pinned[slot * B:(slot + 1) * B].copy_(policy, non_blocking=True)
+            self.value_pinned[slot * B:(slot + 1) * B].copy_(value, non_blocking=True)
+            self.events[slot].record(self.stream)
+        return 0
+
+    def _wait(self, slot):
+        self.events[slot].synchronize()
+        return 0
 
     # ---- NN 評価 (C++ から呼ばれる) ----
     def _evaluate(self, n):
-        if self.graph is not None:
-            # バッチが満杯でなくても全体を流す (後ろの行は前回の残りで、結果は読まれない)
-            self.graph_input.copy_(self.features, non_blocking=True)
-            self.graph.replay()
-            self.policy_pinned.copy_(self.graph_policy, non_blocking=True)
-            self.value_pinned.copy_(self.graph_value, non_blocking=True)
-            torch.cuda.current_stream().synchronize()
-            return 0
+        if self.graphs is not None:
+            self._launch(0, n)
+            return self._wait(0)
         with torch.no_grad():
             x = self.features[0:n].to(self.device)
             policy_logits, value_logits = self.model(x)

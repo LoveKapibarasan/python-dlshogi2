@@ -146,14 +146,32 @@ struct QueueEntry {
 
 typedef int (*EvalCallback)(int n);
 typedef int (*InterruptCallback)(void);
+typedef int (*LaunchCallback)(int slot, int n);
+typedef int (*WaitCallback)(int slot);
 
-struct Searcher {
-    int batch_size;
+typedef std::vector<std::pair<Node*, int>> Trajectory;
+
+// 1 バッチ分の入出力と、その評価を待っている経路
+struct Slot {
     float* features;      // [batch][104][81]
     float* policy_out;    // [batch][2187]
     float* value_out;     // [batch]
+    std::vector<QueueEntry> queue;
+    int count = 0;                    // キューに積んだ局面の数
+    std::vector<Trajectory> batch;    // 評価待ちの経路
+    int nbatch = 0;
+    std::vector<Trajectory> discarded;
+};
+
+struct Searcher {
+    int batch_size;
+    Slot slots[2];
+    Slot* cur;                        // queue_node が積む先
     EvalCallback eval_cb = nullptr;
     InterruptCallback interrupt_cb = nullptr;
+    // 設定されていれば、GPU が 1 バッチを評価している間に次のバッチを集める
+    LaunchCallback launch_cb = nullptr;
+    WaitCallback wait_cb = nullptr;
 
     double c_puct = 1.0;
     double c_base = 19652.0;
@@ -167,13 +185,19 @@ struct Searcher {
     std::string start_position;       // "startpos" / "sfen ..."
     std::vector<int> moves;           // 開始局面からの指し手
 
-    std::vector<QueueEntry> queue;
-    int current_batch_index = 0;
     long long playout_count = 0;
 
-    Searcher(int bs, float* f, float* p, float* v)
-        : batch_size(bs), features(f), policy_out(p), value_out(v) {
-        queue.resize(bs);
+    // バッファは nslots 個のスロットが連続して並んでいる
+    Searcher(int bs, int nslots, float* f, float* p, float* v) : batch_size(bs) {
+        for (int k = 0; k < 2; k++) {
+            const int o = k < nslots ? k : 0;
+            slots[k].features = f + (size_t)o * bs * FEATURES_NUM * 81;
+            slots[k].policy_out = p + (size_t)o * bs * MOVE_LABELS_NUM;
+            slots[k].value_out = v + (size_t)o * bs;
+            slots[k].queue.resize(bs);
+            slots[k].batch.resize(bs);
+        }
+        cur = &slots[0];
         game_root.reset(new Node());
         current_head = game_root.get();
     }
@@ -198,20 +222,25 @@ struct Searcher {
     }
 
     void queue_node(const __Board& board, Node* node) {
-        make_input_features(board, features + (size_t)current_batch_index * FEATURES_NUM * 81);
-        queue[current_batch_index] = {node, board.turn()};
-        current_batch_index++;
+        make_input_features(board, cur->features + (size_t)cur->count * FEATURES_NUM * 81);
+        cur->queue[cur->count] = {node, board.turn()};
+        cur->count++;
     }
 
     // ---- 評価 (MCTSPlayer.eval_node) ----
     void eval_node() {
-        const int n = current_batch_index;
-        eval_cb(n);
+        eval_cb(slots[0].count);
+        apply_eval(slots[0]);
+    }
+
+    // 評価結果をノードに書き込む
+    void apply_eval(Slot& slot) {
+        const int n = slot.count;
         std::vector<float> logits;
         for (int i = 0; i < n; i++) {
-            Node* node = queue[i].node;
-            const int color = queue[i].color;
-            const float* pl = policy_out + (size_t)i * MOVE_LABELS_NUM;
+            Node* node = slot.queue[i].node;
+            const int color = slot.queue[i].color;
+            const float* pl = slot.policy_out + (size_t)i * MOVE_LABELS_NUM;
             const size_t m = node->child_move.size();
             logits.resize(m);
             for (size_t j = 0; j < m; j++)
@@ -229,7 +258,7 @@ struct Searcher {
             }
             for (size_t j = 0; j < m; j++) logits[j] /= sum;
             node->set_policy(logits);
-            node->value = value_out[i];
+            node->value = slot.value_out[i];
         }
     }
 
@@ -326,50 +355,89 @@ struct Searcher {
     }
 
     // ---- 探索ループ (search) ----
+    // 1 バッチ分の降下を行い、評価待ちの経路を slot に集める
+    void collect(Slot& slot) {
+        cur = &slot;
+        slot.count = 0;
+        slot.nbatch = 0;
+        slot.discarded.clear();
+        for (int i = 0; i < batch_size; i++) {
+            auto& traj = slot.batch[slot.nbatch];
+            traj.clear();
+            const double result = uct_search(root_board, current_head, traj);
+            unwind(traj.size());
+            if (result != DISCARDED) {
+                playout_count++;
+            } else {
+                slot.discarded.push_back(traj);
+                if ((int)slot.discarded.size() > batch_size / 2) break;
+            }
+            if (result == QUEUING) slot.nbatch++;  // 評価待ちの経路だけ残す
+        }
+    }
+
+    // 評価済みの slot について、破棄した経路の Virtual Loss を戻し、結果をバックアップする
+    void finish(Slot& slot) {
+        for (auto& traj : slot.discarded)
+            for (auto& [node, idx] : traj) {
+                node->move_count -= VIRTUAL_LOSS;
+                node->child_move_count[idx] -= VIRTUAL_LOSS;
+                node->refresh_child(idx);
+            }
+        for (int b = 0; b < slot.nbatch; b++) {
+            auto& traj = slot.batch[b];
+            double result = 0.0;
+            bool leaf = true;
+            for (auto it = traj.rbegin(); it != traj.rend(); ++it) {
+                Node* node = it->first;
+                const int idx = it->second;
+                if (leaf) {
+                    result = 1.0 - (double)node->child_node[idx]->value;
+                    leaf = false;
+                }
+                update_result(node, idx, result);
+                result = 1.0 - result;
+            }
+        }
+    }
+
+    bool should_stop(long long max_playouts) {
+        if (max_playouts >= 0 && playout_count >= max_playouts) return true;
+        return interrupt_cb && interrupt_cb();
+    }
+
     long long search(long long max_playouts) {
-        std::vector<std::vector<std::pair<Node*, int>>> batch(batch_size);
-        std::vector<std::vector<std::pair<Node*, int>>> discarded;
+        if (!launch_cb) {
+            // MCTSPlayer.search と同じ逐次版
+            while (true) {
+                collect(slots[0]);
+                if (slots[0].nbatch > 0) eval_node();
+                finish(slots[0]);
+                if (should_stop(max_playouts)) return playout_count;
+            }
+        }
+        // 2 スロットを交互に使い、GPU の評価と次のバッチの降下を重ねる
+        int a = 0;
+        collect(slots[a]);
+        if (slots[a].nbatch > 0) launch_cb(a, slots[a].count);
         while (true) {
-            discarded.clear();
-            current_batch_index = 0;
-            int nbatch = 0;
-            for (int i = 0; i < batch_size; i++) {
-                auto& traj = batch[nbatch];
-                traj.clear();
-                const double result = uct_search(root_board, current_head, traj);
-                unwind(traj.size());
-                if (result != DISCARDED) {
-                    playout_count++;
-                } else {
-                    discarded.push_back(traj);
-                    if ((int)discarded.size() > batch_size / 2) break;
-                }
-                if (result == QUEUING) nbatch++;  // 評価待ちの経路だけ残す
+            const int b = 1 - a;
+            collect(slots[b]);
+            if (slots[b].nbatch > 0) launch_cb(b, slots[b].count);
+            if (slots[a].nbatch > 0) {
+                wait_cb(a);
+                apply_eval(slots[a]);
             }
-            if (nbatch > 0) eval_node();
-            for (auto& traj : discarded)
-                for (auto& [node, idx] : traj) {
-                    node->move_count -= VIRTUAL_LOSS;
-                    node->child_move_count[idx] -= VIRTUAL_LOSS;
-                    node->refresh_child(idx);
+            finish(slots[a]);
+            if (should_stop(max_playouts)) {
+                if (slots[b].nbatch > 0) {
+                    wait_cb(b);
+                    apply_eval(slots[b]);
                 }
-            for (int b = 0; b < nbatch; b++) {
-                auto& traj = batch[b];
-                double result = 0.0;
-                bool leaf = true;
-                for (auto it = traj.rbegin(); it != traj.rend(); ++it) {
-                    Node* node = it->first;
-                    const int idx = it->second;
-                    if (leaf) {
-                        result = 1.0 - (double)node->child_node[idx]->value;
-                        leaf = false;
-                    }
-                    update_result(node, idx, result);
-                    result = 1.0 - result;
-                }
+                finish(slots[b]);
+                return playout_count;
             }
-            if (max_playouts >= 0 && playout_count >= max_playouts) return playout_count;
-            if (interrupt_cb && interrupt_cb()) return playout_count;
+            a = b;
         }
     }
 
@@ -424,7 +492,8 @@ struct Searcher {
 
 extern "C" {
 
-void* uct_new(int batch_size, float* features, float* policy_out, float* value_out) {
+// バッファは nslots (1 か 2) スロット分、スロットごとに batch_size 局面ぶん並べる
+void* uct_new(int batch_size, int nslots, float* features, float* policy_out, float* value_out) {
     static bool initialized = false;
     if (!initialized) {
         // cshogi のモジュール初期化と同じ
@@ -436,7 +505,7 @@ void* uct_new(int batch_size, float* features, float* policy_out, float* value_o
         init_label_permutation();
         initialized = true;
     }
-    return new Searcher(batch_size, features, policy_out, value_out);
+    return new Searcher(batch_size, nslots, features, policy_out, value_out);
 }
 
 void uct_free(void* h) { delete (Searcher*)h; }
@@ -457,6 +526,14 @@ void uct_set_callbacks(void* h, EvalCallback eval_cb, InterruptCallback interrup
     s->interrupt_cb = interrupt_cb;
 }
 
+// launch(slot, n) は評価を GPU に投げてすぐ戻り、wait(slot) はその完了を待つ。
+// 設定すると、探索は 2 スロットで GPU と CPU を重ねて回す (nslots=2 で作ること)
+void uct_set_pipeline(void* h, LaunchCallback launch_cb, WaitCallback wait_cb) {
+    auto* s = (Searcher*)h;
+    s->launch_cb = launch_cb;
+    s->wait_cb = wait_cb;
+}
+
 // start: "startpos" または sfen 文字列。moves: cshogi の指し手 (int) の配列
 int uct_set_position(void* h, const char* start, const int* moves, int n) {
     auto* s = (Searcher*)h;
@@ -469,7 +546,8 @@ int uct_prepare_root(void* h) {
     Node* root = s->current_head;
     if (!root->expanded) root->expand(s->root_board);
     if (!root->evaluated && !root->child_move.empty()) {
-        s->current_batch_index = 0;
+        s->cur = &s->slots[0];
+        s->slots[0].count = 0;
         s->queue_node(s->root_board, root);
         s->eval_node();
     }
