@@ -32,6 +32,7 @@ METRICS_DIR="${METRICS_DIR:-$WORKDIR/metrics}"  # structured metrics for the das
 WINDOW="${WINDOW:-0}"              # train on the latest N iterations' data only (0 = all)
 SELFPLAY_ARGS="${SELFPLAY_ARGS:-}" # extra pydlshogi2.selfplay arguments (e.g. --temp_cutoff 999)
 TRAIN_ARGS="${TRAIN_ARGS:-}"       # extra pydlshogi2.train arguments (e.g. --amp --amp_dtype float16)
+PRUNE_CHECKPOINTS="${PRUNE_CHECKPOINTS:-}"  # set to 1 to keep only every 10th old checkpoint
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -100,6 +101,14 @@ for i in $(seq 1 "$ITERATIONS"); do
         --set model="$CURRENT" --set checkpoint="$NEXT" --set data="$DATA" \
         --set data_bytes="$(stat -c%s "$DATA")" \
         --set seconds="$(( $(date +%s) - ITER_STARTED ))" > /dev/null
+
+    # 古いチェックポイントは容量を食うので、10 イテレーションごとのものだけ残す
+    if [ -n "$PRUNE_CHECKPOINTS" ] && [ "$i" -gt 2 ]; then
+        OLD=$((i - 2))
+        if [ $((OLD % 10)) -ne 0 ]; then
+            rm -f "$WORKDIR/checkpoint-$(printf '%03d' "$OLD").pth"
+        fi
+    fi
 
     CURRENT="$NEXT"
 done
