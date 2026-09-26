@@ -24,6 +24,8 @@
 #   BLOCKS     residual blocks             (default 10)
 #   CHANNELS   channel width               (default 192)
 #   AMP_DTYPE  autocast dtype              (default float16; bfloat16 on Ampere+)
+#   INIT_MODEL fine-tune every band from this base checkpoint (default: from scratch)
+#   TRAIN_NAME train file name inside each band dir (default train.hcpe)
 #   PYTHON     interpreter                 (default ../.venv/bin/python)
 set -e
 
@@ -40,21 +42,25 @@ GPU="${GPU:-0}"
 BLOCKS="${BLOCKS:-10}"
 CHANNELS="${CHANNELS:-192}"
 AMP_DTYPE="${AMP_DTYPE:-float16}"
+INIT_MODEL="${INIT_MODEL:-}"
+TRAIN_NAME="${TRAIN_NAME:-train.hcpe}"
 PYTHON="${PYTHON:-$REPO_DIR/.venv/bin/python}"
 
 cd "$REPO_DIR"
 for band in $BANDS; do
-    train="$DATA_DIR/$band/train.hcpe"
+    train="$DATA_DIR/$band/$TRAIN_NAME"
     test="$DATA_DIR/$band/test.hcpe"
-    if [ ! -s "$train" ] || [ ! -s "$test" ]; then
-        echo "=== skip $band (missing $train / $test) ==="
+    if [ ! -s "$train" ] || [ "$(stat -c %s "$test" 2>/dev/null || echo 0)" -lt $((1024 * 38)) ]; then
+        echo "=== skip $band (missing $train, or $test has < 1024 positions) ==="
         continue
     fi
     echo "=== training band: $band ($(date '+%F %T')) ==="
+    init_args=()
+    [ -n "$INIT_MODEL" ] && init_args=(--init_model "$INIT_MODEL")
     "$PYTHON" -m pydlshogi2.train "$train" "$test" \
         --gpu "$GPU" --amp --amp_dtype "$AMP_DTYPE" \
         --blocks "$BLOCKS" --channels "$CHANNELS" --epoch "$EPOCHS" --batchsize "$BATCHSIZE" --lr "$LR" \
-        --val_lambda 1.0 --save_interval 2000 \
+        "${init_args[@]}" --val_lambda 1.0 --save_interval 2000 \
         --log "$OUT_DIR/train-$band.log" \
         --checkpoint "$OUT_DIR/model-$band-{epoch:03}.pth"
     echo "=== done $band ($(date '+%F %T')) ==="

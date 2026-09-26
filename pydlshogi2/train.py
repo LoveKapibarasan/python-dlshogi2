@@ -24,6 +24,9 @@ parser.add_argument('--eval_coef', type=float, default=600.0,
                     help='sigmoid temperature mapping eval (cp) to a win rate')
 parser.add_argument('--checkpoint', default='checkpoints/checkpoint-{epoch:03}.pth', help='checkpoint file name')
 parser.add_argument('--resume', '-r', default='', help='Resume from snapshot')
+parser.add_argument('--init_model', default='',
+                    help='start from this checkpoint\'s weights only (fresh optimizer, epoch 0), '
+                         'e.g. to fine-tune a base model on one rating band')
 parser.add_argument('--eval_interval', type=int, default=100, help='evaluation interval')
 parser.add_argument('--save_interval', type=int, default=0,
                     help='save a checkpoint every N steps (0 = only at epoch end); '
@@ -84,6 +87,10 @@ if args.resume:
     resume_checkpoint = torch.load(args.resume, map_location=device)
     # 旧checkpointは構成情報を持たないため、load_networkと同じレガシー構成で復元する
     network_config = resume_checkpoint.get('network', LEGACY_NETWORK_CONFIG)
+elif args.init_model:
+    resume_checkpoint = None
+    init_checkpoint = torch.load(args.init_model, map_location=device)
+    network_config = init_checkpoint.get('network', LEGACY_NETWORK_CONFIG)
 else:
     resume_checkpoint = None
     network_config = {'blocks': args.blocks, 'channels': args.channels,
@@ -110,6 +117,9 @@ if resume_checkpoint is not None:
     # 学習率を引数の値に変更
     optimizer.param_groups[0]['lr'] = args.lr
 else:
+    if args.init_model:
+        logging.info('Initialising the weights from {}'.format(args.init_model))
+        model.load_state_dict(init_checkpoint['model'])
     epoch = 0
     t = 0  # total steps
 
