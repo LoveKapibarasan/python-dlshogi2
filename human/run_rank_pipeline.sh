@@ -19,7 +19,8 @@
 # Tunables: KIF_DIR (~/data/kif), DATA_DIR (~/human_data_ranks/latest),
 # CSA_DIR ($DATA_DIR/csa), KIF_SOURCE (free text for DATASET.md),
 # BASE_POSITIONS (20000000), BAND_POSITIONS (4000000), BASE_EPOCHS (1),
-# EPOCHS (2), plus everything train_all_bands.sh takes.
+# EPOCHS (2), STOP_AFTER_DATA (set to stop once the HCPE bands are built, e.g. to
+# train on another host), plus everything train_all_bands.sh takes.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -78,6 +79,11 @@ for band in $BANDS; do
     [ -s "$DATA_DIR/$band/train_capped.hcpe" ] || \
         head -c $((BAND_POSITIONS * REC)) "$DATA_DIR/$band/train.hcpe" > "$DATA_DIR/$band/train_capped.hcpe"
 done
+
+if [ -n "$STOP_AFTER_DATA" ]; then
+    echo "=== data ready in $DATA_DIR ($(date '+%F %T')) ==="
+    exit 0
+fi
 
 # ベースモデル: 全段級 (帯の外も含む) から均等に BASE_POSITIONS を集める
 BASE="$DATA_DIR/base"
