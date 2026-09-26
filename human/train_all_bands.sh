@@ -13,26 +13,33 @@
 #   nohup ./human/train_all_bands.sh > human_data/train_all.log 2>&1 &
 #
 # Tunables (environment variables):
-#   BANDS      space-separated band dirs   (default "kyu dan1-3 dan7plus")
+#   BANDS      space-separated band dirs   (default: the nine single-rank bands
+#              3級..六段 made by `--bands 28,29,30,31,32,33,34,35,36,37`)
 #   DATA_DIR   dataset root                (default ~/human_data)
 #   OUT_DIR    checkpoint output dir       (default = DATA_DIR)
 #   EPOCHS     epochs per band             (default 6)
 #   BATCHSIZE  training batch size         (default 256)
 #   LR         learning rate               (default 0.01)
 #   GPU        GPU id                      (default 0)
+#   BLOCKS     residual blocks             (default 10)
+#   CHANNELS   channel width               (default 192)
+#   AMP_DTYPE  autocast dtype              (default float16; bfloat16 on Ampere+)
 #   PYTHON     interpreter                 (default ../.venv/bin/python)
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-BANDS="${BANDS:-kyu dan1-3 dan7plus}"
+BANDS="${BANDS:-0028-0028 0029-0029 0030-0030 0031-0031 0032-0032 0033-0033 0034-0034 0035-0035 0036-0036}"
 DATA_DIR="${DATA_DIR:-$HOME/human_data}"
 OUT_DIR="${OUT_DIR:-$DATA_DIR}"
 EPOCHS="${EPOCHS:-6}"
 BATCHSIZE="${BATCHSIZE:-256}"
 LR="${LR:-0.01}"
 GPU="${GPU:-0}"
+BLOCKS="${BLOCKS:-10}"
+CHANNELS="${CHANNELS:-192}"
+AMP_DTYPE="${AMP_DTYPE:-float16}"
 PYTHON="${PYTHON:-$REPO_DIR/.venv/bin/python}"
 
 cd "$REPO_DIR"
@@ -45,7 +52,8 @@ for band in $BANDS; do
     fi
     echo "=== training band: $band ($(date '+%F %T')) ==="
     "$PYTHON" -m pydlshogi2.train "$train" "$test" \
-        --gpu "$GPU" --amp --epoch "$EPOCHS" --batchsize "$BATCHSIZE" --lr "$LR" \
+        --gpu "$GPU" --amp --amp_dtype "$AMP_DTYPE" \
+        --blocks "$BLOCKS" --channels "$CHANNELS" --epoch "$EPOCHS" --batchsize "$BATCHSIZE" --lr "$LR" \
         --val_lambda 1.0 --save_interval 2000 \
         --log "$OUT_DIR/train-$band.log" \
         --checkpoint "$OUT_DIR/model-$band-{epoch:03}.pth"

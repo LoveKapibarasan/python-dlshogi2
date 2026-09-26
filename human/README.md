@@ -53,6 +53,24 @@ Rating extraction requires the CSA records to carry `'black_rate:` / `'white_rat
 comment lines (floodgate-style). Records without ratings are skipped unless you
 pass `--allow_unrated` (they then go to an `unrated/` band).
 
+### Nine single-rank bands, 3級 .. 六段
+
+To train one model per rank from 3級 to 六段, give every ordinal from 28 (3級)
+to 37 as an edge. That makes one band per rank, `0028-0028` (3級) through
+`0036-0036` (六段), plus the `0000-0027` / `0037-up` catch-alls, which are not
+trained:
+
+```bash
+python human/kif_to_csa.py ~/data/kif ~/data/csa --shards 256   # many shards: each is parsed in RAM
+python human/csa_to_hcpe_by_rating.py ~/data/csa ~/human_data \
+    --bands 28,29,30,31,32,33,34,35,36,37 --filter_moves 20
+nohup ./human/train_all_bands.sh > ~/human_data/train_all.log 2>&1 &
+```
+
+| band dir | 0028 | 0029 | 0030 | 0031 | 0032 | 0033 | 0034 | 0035 | 0036 |
+|---|---|---|---|---|---|---|---|---|---|
+| rank | 3級 | 2級 | 1級 | 初段 | 二段 | 三段 | 四段 | 五段 | 六段 |
+
 ## 2. Train one model per rating band
 
 ```bash
