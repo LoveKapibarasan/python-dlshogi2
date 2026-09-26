@@ -35,10 +35,11 @@ it for white; see below.
 
 ### Human-like variant
 
-`human/` is a separate sub-project that buckets the same conversion by player
-strength (Maia-chess style) to imitate a rating band rather than to maximise
-strength. It shares the network and feature encoding but nothing else. See
-[`human/README.md`](https://github.com/LoveKapibarasan/python-dlshogi2/blob/main/human/README.md).
+The human-like (Maia-chess style) sub-project, which buckets the same
+conversion by player strength to imitate a rating band rather than to maximise
+strength, lives on its own
+[`human-like`](https://github.com/LoveKapibarasan/python-dlshogi2/tree/human-like)
+branch. This branch is only the self-play engine.
 
 ## The value target: `--val_lambda` and `--eval_coef`
 
