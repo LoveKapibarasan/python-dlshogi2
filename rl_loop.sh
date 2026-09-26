@@ -33,8 +33,16 @@ WINDOW="${WINDOW:-0}"              # train on the latest N iterations' data only
 SELFPLAY_ARGS="${SELFPLAY_ARGS:-}" # extra pydlshogi2.selfplay arguments (e.g. --temp_cutoff 999)
 TRAIN_ARGS="${TRAIN_ARGS:-}"       # extra pydlshogi2.train arguments (e.g. --amp --amp_dtype float16)
 PRUNE_CHECKPOINTS="${PRUNE_CHECKPOINTS:-}"  # set to 1 to keep only every 10th old checkpoint
+# 昇格ゲート (EXP-003): 新しいチェックポイントを現行の最良と対局させ、
+# 勝率が GATE_THRESHOLD 以上のときだけ次のイテレーションの自己対局に使う
+GATE_GAMES="${GATE_GAMES:-0}"       # 0 = gate off (every checkpoint is promoted)
+GATE_PLAYOUTS="${GATE_PLAYOUTS:-400}"
+GATE_THRESHOLD="${GATE_THRESHOLD:-0.5}"
+# GATE_ENGINE / GATE_OPENING の既定値は SCRIPT_DIR が決まってから (下で) 設定する
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+GATE_ENGINE="${GATE_ENGINE:-$SCRIPT_DIR/usi_engine_native.sh}"
+GATE_OPENING="${GATE_OPENING:-$SCRIPT_DIR/openings.txt}"
 
 mkdir -p "$WORKDIR" "$METRICS_DIR"
 CURRENT="$INIT_MODEL"
@@ -53,10 +61,14 @@ for i in $(seq 1 "$ITERATIONS"); do
     DATA="$WORKDIR/selfplay-$(printf '%03d' "$i").hcpe"
     NEXT="$WORKDIR/checkpoint-$(printf '%03d' "$i").pth"
 
+    GATE_FILE="$WORKDIR/gate-$(printf '%03d' "$i").txt"
     # 既に学習済みのイテレーションはスキップ (クラッシュ/preemptionからの再開)
-    if [ -s "$NEXT" ]; then
+    if [ -s "$NEXT" ] || [ -s "$GATE_FILE" ]; then
         echo "iteration $i already trained ($NEXT); skipping"
-        CURRENT="$NEXT"
+        # ゲートで落ちたチェックポイントは最良にしない
+        if ! grep -q '^reject' "$GATE_FILE" 2>/dev/null; then
+            CURRENT="$NEXT"
+        fi
         continue
     fi
 
@@ -102,15 +114,42 @@ for i in $(seq 1 "$ITERATIONS"); do
         --set data_bytes="$(stat -c%s "$DATA")" \
         --set seconds="$(( $(date +%s) - ITER_STARTED ))" > /dev/null
 
-    # 古いチェックポイントは容量を食うので、10 イテレーションごとのものだけ残す
+    PROMOTE=1
+    if [ "$GATE_GAMES" -gt 0 ]; then
+        echo "[gate] $NEXT vs $CURRENT ($GATE_GAMES games, $GATE_PLAYOUTS playouts)"
+        GATE_OUT="$("$PYTHON" -m pydlshogi2.match \
+            --engine1 "$GATE_ENGINE" --name1 "rl-$(printf '%03d' "$i")" \
+            --engine2 "$GATE_ENGINE" --name2 "best" \
+            --options1 "modelfile=$NEXT" --options2 "modelfile=$CURRENT" \
+            --games "$GATE_GAMES" --playouts "$GATE_PLAYOUTS" --opening "$GATE_OPENING" \
+            --metrics "$METRICS_DIR/gate-$(printf '%03d' "$i").jsonl" \
+            --experiment "rl-gate" --quiet 2>&1)" || true
+        SCORE="$(echo "$GATE_OUT" | awk '/^score/ {print $3}')"
+        if [ -z "$SCORE" ] || ! awk -v s="$SCORE" -v t="$GATE_THRESHOLD" 'BEGIN { exit !(s >= t) }'; then
+            PROMOTE=0
+        fi
+        echo "$([ $PROMOTE = 1 ] && echo accept || echo reject) score=$SCORE vs=$CURRENT" > "$GATE_FILE"
+        echo "[gate] $(cat "$GATE_FILE")"
+        echo "$GATE_OUT" | grep -E "^(W-L-D|Elo)" || true
+        # 対局が成立しなかったときは原因を残す
+        [ -z "$SCORE" ] && echo "$GATE_OUT" | tail -20 >> "$GATE_FILE"
+    fi
+
+    # 古いチェックポイントは容量を食うので、10 イテレーションごとのものだけ残す (最良は残す)
     if [ -n "$PRUNE_CHECKPOINTS" ] && [ "$i" -gt 2 ]; then
-        OLD=$((i - 2))
-        if [ $((OLD % 10)) -ne 0 ]; then
-            rm -f "$WORKDIR/checkpoint-$(printf '%03d' "$OLD").pth"
+        OLD="$WORKDIR/checkpoint-$(printf '%03d' "$((i - 2))").pth"
+        if [ $(((i - 2) % 10)) -ne 0 ] && [ "$OLD" != "$CURRENT" ]; then
+            rm -f "$OLD"
         fi
     fi
 
-    CURRENT="$NEXT"
+    if [ "$PROMOTE" = 1 ]; then
+        CURRENT="$NEXT"
+    else
+        # 昇格しなかったチェックポイントは使わないので消す
+        [ -n "$PRUNE_CHECKPOINTS" ] && rm -f "$NEXT"
+    fi
+    echo "$CURRENT" > "$WORKDIR/best.txt"
 done
 
 "$PYTHON" -m pydlshogi2.metrics "$RL_LOG" --type event --event run_end \

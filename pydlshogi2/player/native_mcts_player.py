@@ -96,6 +96,8 @@ class NativeMCTSPlayer(MCTSPlayer):
         super().__init__()
         # fp16 + CUDA Graph で推論する (False なら MCTSPlayer と同じ fp32 の逐次実行)
         self.fast_inference = True
+        # 木の中 (ノード展開時) の詰み探索手数。探索は GPU 待ちなので、CPU の余りで深く読める
+        self.mate_tree_ply = 3
         self.lib = None
         self.handle = None
         self.native_tree = _TreeView()
@@ -105,10 +107,14 @@ class NativeMCTSPlayer(MCTSPlayer):
     def usi(self):
         super().usi()
         print('option name fast_inference type check default true')
+        print('option name mate_tree_ply type spin default 3 min 3 max 15')
 
     def setoption(self, args):
         if args[1] == 'fast_inference':
             self.fast_inference = args[3] == 'true'
+        elif args[1] == 'mate_tree_ply':
+            # mate_move は3手以上の奇数しか受け付けない
+            self.mate_tree_ply = max(3, int(args[3]) | 1)
         else:
             super().setoption(args)
 
@@ -149,7 +155,7 @@ class NativeMCTSPlayer(MCTSPlayer):
 
     def _apply_params(self):
         self.lib.uct_set_params(self.handle, self.c_puct, self.c_base, self.fpu_reduction,
-                                self.temperature, 3)
+                                self.temperature, self.mate_tree_ply)
 
     def _capture_graphs(self, nslots):
         """Capture, per slot, one fp16 channels-last forward pass of a full batch.
