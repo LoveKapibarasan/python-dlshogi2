@@ -53,6 +53,70 @@ See [Metrics and Dashboard](Metrics-and-Dashboard).
 
 ---
 
+## 2026-09-26 — EXP-006: 探索を C++ に移して 6.6 倍速、main に 10-0
+
+- **experiment**: `EXP-006` ([#10](https://github.com/LoveKapibarasan/python-dlshogi2/issues/10))
+- **commit**: `87eacec` / `c35f84f` (`feat/native-search`) 対 `54c7b06` (main)
+- **hardware**: RTX 2060 6GB、Xeon E5-2630 v4 (対局中は自己対局を停止)
+- **model**: 両者とも `checkpoints/checkpoint.pth` (10×192)
+
+### 何をしたか
+
+`MCTSPlayer.search` 以下 (選択・展開・詰み/千日手/入玉判定・評価の反映・バックアップ)
+を **C++ に移植**した (`pydlshogi2/uct/native/uct.cpp`、ctypes で読む)。
+盤面は cshogi 自身の C++ ソースを使うので、指し手の数値も合法手の順番も同一。
+ニューラルネットだけ Python に残し、C++ からバッチごとに呼び戻す。
+
+1. **移植は演算単位で同じ。** float32/float64 の丸めまで Python 版と同じ順に書いた。
+   fp32 推論なら、ルートの訪問数が Python 版と **完全一致** する
+   (`tests/test_native_search.py`)。移植中に入力特徴量の持ち駒プレーンの
+   並びを 1 か所間違えたが (歩の最大枚数 8 と 18)、この比較が 32 プレイアウトで捕まえた
+2. **推論は fp16 + channels-last + CUDA Graph。** バッチ 32 の 10×192 では、
+   PyTorch の逐次実行はカーネル起動待ちが大半だった
+3. **GPU と CPU を重ねる。** 2 つのバッチ枠を交互に使い、GPU が片方を評価している間に
+   もう片方の降下を進める (dlshogi と同じ)
+
+| 実装 | playout/s (4 局面 × 3,000) | 選んだ手 |
+|------|------------------------------|----------|
+| main (Python 探索) | 1,442 | 基準 |
+| C++ 探索 + fp32 (Python と同一の木) | 2,950 | 同じ |
+| + fp16 CUDA Graph | 6,164 | 同じ |
+| + GPU/CPU の重ね合わせ | **9,546** | 同じ |
+
+### 結果
+
+main との対局 (1 手 1 秒、`87eacec` 時点 = 6,164 playout/s 版):
+
+```
+games      : 10 (SPRT で打ち切り)
+W-L-D      : 10-0-0
+pairs      : 5 ペア すべて 2 連勝
+Elo        : 95% CI [+170, +3600]
+SPRT       : llr=+3.097 H0=0 H1=100 -> accept
+```
+
+水匠10 (1 スレッド、10 万ノード/手) との対局 (`c35f84f`、9,546 playout/s 版):
+
+| | W-L-D | score | Elo |
+|--|-------|-------|-----|
+| main (GAP 計測) | 3-16-1 | 0.175 | 約 -270 |
+| **native** | **13-7-0** | 0.650 | 約 +110 (95% CI [-39, +310]) |
+
+同じ相手に対して **約 +380 Elo** (各 20 局なので粗い)。
+native 側の対局の序盤数局は、テストの CPU 負荷と重なっていた。
+
+### 結論: **採用。** 渡されたコードを大きく上回った
+
+- 読みの量が 6.6 倍になり、それがそのまま棋力になった。モデルは同じ
+- 次のボトルネックは GPU (推論)。10×192 をバッチ 32 で回すと RTX 2060 は
+  ほぼ埋まっている
+- 自己対局 (`selfplay.py`) はまだ Python 探索なので、ここにも載せれば
+  ゼロからの強化学習の生成速度も数倍になる
+
+- **metrics**: `match-EXP-006-20260926-140949.jsonl`, `match-GAP-native-n100000-*.jsonl`
+
+---
+
 ## 2026-09-26 — GAP: YaneuraOu + 水匠10 との差はおよそ 700〜900 Elo
 
 - **目標**: 同じ PC 上の YaneuraOu + 水匠に勝ち越すこと。まず差を測った。

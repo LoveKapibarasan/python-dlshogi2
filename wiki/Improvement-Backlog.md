@@ -29,7 +29,7 @@ run and how to read its verdict.
 | EXP-003 | `rl_loop.sh` に昇格ゲートを入れる (前チェックポイントに勝てなければ昇格しない) | pipeline | 退行の防止 | 小 | 未着手 | [#7](https://github.com/LoveKapibarasan/python-dlshogi2/issues/7) |
 | EXP-004 | 探索パラメータ (`c_puct` / `fpu_reduction` / `temperature`) の総当たり調整 | tuning | +0〜80 → **実測 c_puct は空振り** | 中 (GPU時間) | **棄却** | [#8](https://github.com/LoveKapibarasan/python-dlshogi2/issues/8) |
 | EXP-005 | `batchsize` と virtual loss の見直し | tuning | +0〜30 | 小 | 未着手 | [#9](https://github.com/LoveKapibarasan/python-dlshogi2/issues/9) |
-| EXP-006 | 局面評価の呼び出し経路を JIT 化する (numba / Cython) | search | +20〜60 (EXP-001 後の実測で下方修正) | 中 | 未着手 | [#10](https://github.com/LoveKapibarasan/python-dlshogi2/issues/10) |
+| EXP-006 | 探索の内側を C++ に移す (当初案は numba / Cython) | search | +20〜60 → **実測: 6.6 倍速、main に 10-0 (CI 下限 +170)** | 中 | **採用** | [#10](https://github.com/LoveKapibarasan/python-dlshogi2/issues/10) |
 | EXP-007 | 特徴量生成と `make_move_label` のベクトル化 | search | +5〜15 | 小 | 未着手 | [#11](https://github.com/LoveKapibarasan/python-dlshogi2/issues/11) |
 | EXP-008 | 詰み探索の深さをルート以外にも広げる | search | +10〜40 → **実測 5 手で +17 ± 59 (決着せず)** | 中 | **保留** | [#12](https://github.com/LoveKapibarasan/python-dlshogi2/issues/12) |
 | EXP-009 | ネットワークの再学習 (20×256 SE, Floodgate 全体) | training | +200 以上 | 大 (GPU が足りない) | 保留 | [#13](https://github.com/LoveKapibarasan/python-dlshogi2/issues/13) |
