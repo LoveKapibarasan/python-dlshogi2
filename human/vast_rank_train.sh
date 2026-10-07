@@ -50,7 +50,7 @@ if ! command -v nvidia-smi >/dev/null 2>&1; then
     exit 1
 fi
 nvidia-smi
-"$PYTHON" -c 'import torch; assert torch.cuda.is_available(), "CUDA is not available"; print("torch", torch.__version__, "CUDA", torch.version.cuda)'
+"$PYTHON" -c 'import torch; assert torch.cuda.is_available(), "CUDA is not available"; x=torch.nn.Conv2d(3, 8, 3).cuda()(torch.randn(1, 3, 16, 16, device="cuda")); torch.cuda.synchronize(); print("torch", torch.__version__, "CUDA", torch.version.cuda, "capability", torch.cuda.get_device_capability(), "conv", tuple(x.shape))'
 
 for band in $BANDS; do
     [ -s "$DATA_DIR/$band/train.hcpe" ] || { echo "missing $DATA_DIR/$band/train.hcpe" >&2; exit 1; }

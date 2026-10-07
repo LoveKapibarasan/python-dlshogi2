@@ -19,7 +19,10 @@ PYBIN="${PYBIN:-python3}"
 VENV="$SCRIPT_DIR/.venv"
 
 echo "[1/4] Creating virtual environment with $PYBIN ..."
-"$PYBIN" -m venv "$VENV"
+# Keep the CUDA-enabled torch supplied by Vast's PyTorch image. Recent PyPI
+# wheels can drop older architectures such as V100 (sm_70), which makes CUDA
+# appear available but fails at the first convolution with no kernel image.
+"$PYBIN" -m venv --system-site-packages "$VENV"
 "$VENV/bin/pip" install --upgrade pip --quiet
 
 echo "[2/4] Installing dependencies (CUDA torch from PyPI) ..."
