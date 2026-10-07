@@ -51,7 +51,11 @@ if [ ! -s "$DATA_DIR/0029-0029/train.hcpe" ]; then
 fi
 
 cd "$REPO_DIR"
-./vast_setup.sh
+if [ ! -x "$REPO_DIR/.venv/bin/python" ]; then
+    ./vast_setup.sh
+else
+    echo "Using existing virtual environment at $REPO_DIR/.venv"
+fi
 
 # Focus first on the requested 2級, 初段, 三段 models. Set BANDS at instance
 # launch time to include additional ranks when desired.
