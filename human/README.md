@@ -74,6 +74,33 @@ nohup ./human/train_all_bands.sh > ~/human_data/train_all.log 2>&1 &
 ### Run the rank pipeline on Vast.ai
 
 The Vast runner uses the same rank-filtered HCPE dataset and training pipeline.
+For an unattended cloud run, first upload the bundle created below to the
+configured R2 bucket, then set `VAST_API_TOKEN`, `R2_ACCESS_KEY`,
+`R2_SECRET_ACCESS_KEY`, and `R2_ENDPOINT` in the local shell from your secret
+manager. The provisioning script generates temporary object-scoped URLs; the
+R2 credentials themselves are not sent to Vast.
+
+```bash
+python human/vast_start_rank_training.py \
+  --dataset-key rustify/human-ranks/20260926-hcpe-vast.tar \
+  --result-key rustify/human-ranks/results/20260926-rank-models.tar.gz \
+  --label human-rank-training-20260926
+```
+
+The default GPU is a verified on-demand Tesla V100, with an hourly price cap of
+$0.25, a 40 GB disk, and 2級・初段・三段 training. Change `--gpu`,
+`--max-hourly`, `--disk-gb`, `--bands`, or `--epochs` to adjust the run. The
+Vast.ai CLI can also be installed with `curl -fsSL https://vast.ai/install.sh | bash`;
+use `vastai show instance INSTANCE_ID` to check its state. Fetch its
+container logs with:
+
+```bash
+VAST_API_TOKEN="$VAST_API_TOKEN" python human/vast_instance_logs.py INSTANCE_ID --tail 100
+```
+
+After training, the instance uploads checkpoints, ONNX files, policy evaluation,
+and logs to the specified result object.
+
 On the source host, package just the HCPE splits and dataset metadata (this
 omits the source KIF/CSA files and any partial checkpoints):
 
