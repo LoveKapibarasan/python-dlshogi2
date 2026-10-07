@@ -71,6 +71,43 @@ nohup ./human/train_all_bands.sh > ~/human_data/train_all.log 2>&1 &
 |---|---|---|---|---|---|---|---|---|---|
 | rank | 3級 | 2級 | 1級 | 初段 | 二段 | 三段 | 四段 | 五段 | 六段 |
 
+### Run the rank pipeline on Vast.ai
+
+The Vast runner uses the same rank-filtered HCPE dataset and training pipeline.
+On the source host, package just the HCPE splits and dataset metadata (this
+omits the source KIF/CSA files and any partial checkpoints):
+
+```bash
+./human/pack_vast_dataset.sh /home/user/human_data_ranks/20260926 \
+  /tmp/human-ranks-20260926.tar.gz
+vastai copy local:/tmp/human-ranks-20260926.tar.gz \
+  INSTANCE_ID:/workspace/human-ranks-20260926.tar.gz
+```
+
+Clone this branch on the Vast instance and run:
+
+```bash
+DATA_DIR=/workspace/human_data_ranks/20260926 \
+DATA_BUNDLE=/workspace/human-ranks-20260926.tar.gz \
+  ./human/vast_rank_train.sh
+tail -f /workspace/human_data_ranks/20260926/logs/vast-rank-*.log
+```
+
+The runner backgrounds the job and resumes from existing outputs. It defaults
+to all nine bands from 3級 through 六段. Each trained checkpoint is exported
+to ONNX under `DATA_DIR/onnx/`; `DATA_DIR/eval-policy.tsv` records top-1 move
+match on up to 50,000 held-out positions per rank. To train only the original
+target ranks (2級, 初段, 三段), set:
+
+```bash
+BANDS="0029-0029 0031-0031 0033-0033" \
+  DATA_DIR=/workspace/human_data_ranks/20260926 ./human/vast_rank_train.sh
+```
+
+The runner expects the HCPE data to be prebuilt and sets
+`SKIP_DATA_BUILD=1`. `BAND_POSITIONS`, `EPOCHS`, `BASE_POSITIONS`, `BATCHSIZE`,
+`GPU`, `BLOCKS`, `CHANNELS`, and `AMP_DTYPE` can be overridden in the same way.
+
 ## 2. Train one model per rating band
 
 ```bash

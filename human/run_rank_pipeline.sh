@@ -20,7 +20,9 @@
 # CSA_DIR ($DATA_DIR/csa), KIF_SOURCE (free text for DATASET.md),
 # BASE_POSITIONS (20000000), BAND_POSITIONS (4000000), BASE_EPOCHS (1),
 # EPOCHS (2), STOP_AFTER_DATA (set to stop once the HCPE bands are built, e.g. to
-# train on another host), plus everything train_all_bands.sh takes.
+# train on another host), SKIP_DATA_BUILD=1 (use prebuilt HCPE files), BANDS
+# (space-separated rank directories to train; defaults to 3級 .. 六段), plus
+# everything train_all_bands.sh takes.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -36,21 +38,30 @@ export EPOCHS="${EPOCHS:-2}"
 export PYTHON="${PYTHON:-$REPO_DIR/.venv/bin/python}"
 export BLOCKS="${BLOCKS:-10}" CHANNELS="${CHANNELS:-192}" AMP_DTYPE="${AMP_DTYPE:-float16}"
 REC=38   # bytes per HuffmanCodedPosAndEval record
-BANDS="0028-0028 0029-0029 0030-0030 0031-0031 0032-0032 0033-0033 0034-0034 0035-0035 0036-0036"
+ALL_RANK_BANDS="0028-0028 0029-0029 0030-0030 0031-0031 0032-0032 0033-0033 0034-0034 0035-0035 0036-0036"
+BANDS="${BANDS:-$ALL_RANK_BANDS}"
 
 cd "$REPO_DIR"
 mkdir -p "$DATA_DIR"
 
-if [ ! -s "$CSA_DIR/shogiwars-00.csa" ]; then
-    echo "=== KIF -> CSA ($(date '+%F %T')) ==="
-    "$PYTHON" human/kif_to_csa.py "$KIF_DIR" "$CSA_DIR" --shards 256 \
-        --manifest "$DATA_DIR/kif_manifest.tsv"
-fi
+if [ "${SKIP_DATA_BUILD:-0}" = "1" ]; then
+    echo "=== using prebuilt HCPE data in $DATA_DIR ($(date '+%F %T')) ==="
+    for band in $BANDS; do
+        [ -s "$DATA_DIR/$band/train.hcpe" ] || { echo "missing $DATA_DIR/$band/train.hcpe" >&2; exit 1; }
+        [ -s "$DATA_DIR/$band/test.hcpe" ] || { echo "missing $DATA_DIR/$band/test.hcpe" >&2; exit 1; }
+    done
+else
+    if [ ! -s "$CSA_DIR/shogiwars-00.csa" ]; then
+        echo "=== KIF -> CSA ($(date '+%F %T')) ==="
+        "$PYTHON" human/kif_to_csa.py "$KIF_DIR" "$CSA_DIR" --shards 256 \
+            --manifest "$DATA_DIR/kif_manifest.tsv"
+    fi
 
-if [ ! -s "$DATA_DIR/0028-0028/train.hcpe" ]; then
-    echo "=== CSA -> per-rank HCPE ($(date '+%F %T')) ==="
-    "$PYTHON" human/csa_to_hcpe_by_rating.py "$CSA_DIR" "$DATA_DIR" \
-        --bands 28,29,30,31,32,33,34,35,36,37 --filter_moves 20 | tee "$DATA_DIR/hcpe_counts.txt"
+    if [ ! -s "$DATA_DIR/0028-0028/train.hcpe" ]; then
+        echo "=== CSA -> per-rank HCPE ($(date '+%F %T')) ==="
+        "$PYTHON" human/csa_to_hcpe_by_rating.py "$CSA_DIR" "$DATA_DIR" \
+            --bands 28,29,30,31,32,33,34,35,36,37 --filter_moves 20 | tee "$DATA_DIR/hcpe_counts.txt"
+    fi
 fi
 
 if [ ! -s "$DATA_DIR/DATASET.md" ]; then
@@ -116,7 +127,7 @@ for band in $BANDS; do
     [ "$n" -ge 1024 ] || echo "WARNING: $band has only $n test positions; it will be skipped or fail"
 done
 
-echo "=== fine-tuning the nine rank models ($(date '+%F %T')) ==="
+echo "=== fine-tuning rank models: $BANDS ($(date '+%F %T')) ==="
 BANDS="$BANDS" INIT_MODEL="$BASE_MODEL" TRAIN_NAME=train_capped.hcpe LR="${FT_LR:-0.005}" \
     "$SCRIPT_DIR/train_all_bands.sh"
 echo "pipeline finished ($(date '+%F %T'))"
